@@ -1,0 +1,310 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+  previewFeatures     = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN
+  INSTRUCTOR
+  STUDENT
+}
+
+enum PermissionScope {
+  ACCOUNTS
+  LEARNING
+  BILLING
+}
+
+enum EntitlementState {
+  ACTIVE
+  REVOKED
+}
+
+model User {
+  id             String               @id @default(uuid()) @db.Uuid
+  email          String               @unique
+  password_hash  String
+  name           String
+  role           String               @default("STUDENT")
+  role_id        String?
+  roleDefinition Role?                @relation(fields: [role_id], references: [id], onDelete: Restrict)
+  active         Boolean              @default(true)
+  suspended      Boolean              @default(false)
+  phone          String?
+  last_login_at  DateTime?             @db.Timestamptz(6)
+  auth_version   Int                  @default(0)
+  created_at     DateTime             @default(now()) @db.Timestamptz(6)
+  devices        StudentDevice[]
+  sessions       AuthSession[]
+  resets         PasswordResetToken[]
+  courses        Course[]
+  payments       Payment[]
+  enrollments    Enrollment[]
+  progress       LearningProgress[]
+  auditLogs      AuditLog[]
+  refunds        Refund[]
+  assessmentSubmissions AssessmentSubmission[]
+
+  @@index([role_id])
+  @@map("users")
+}
+
+model Role {
+  id          String           @id
+  name        RoleName         @unique
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  code        String           @id
+  scope       PermissionScope
+  description String
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  role_id         String
+  permission_code String
+  role            Role       @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  permission      Permission @relation(fields: [permission_code], references: [code], onDelete: Cascade)
+
+  @@id([role_id, permission_code])
+  @@map("role_permissions")
+}
+
+model StudentDevice {
+  id            String        @id @default(uuid()) @db.Uuid
+  user_id       String        @db.Uuid
+  token_hash    String        @unique
+  label         String
+  registered_at DateTime      @default(now()) @db.Timestamptz(6)
+  last_seen_at  DateTime      @default(now()) @db.Timestamptz(6)
+  revoked_at    DateTime?     @db.Timestamptz(6)
+  user          User          @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  sessions      AuthSession[]
+
+  @@unique([user_id], map: "one_registered_device_per_student", where: { revoked_at: null })
+  @@map("devices")
+}
+
+model AuthSession {
+  id            String         @id @default(uuid()) @db.Uuid
+  user_id       String         @db.Uuid
+  device_id     String?        @db.Uuid
+  refresh_hash  String
+  expires_at    DateTime       @db.Timestamptz(6)
+  revoked_at    DateTime?      @db.Timestamptz(6)
+  created_at    DateTime       @default(now()) @db.Timestamptz(6)
+  user          User           @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  studentDevice StudentDevice? @relation(fields: [device_id], references: [id], onDelete: Restrict)
+
+  @@index([user_id], map: "sessions_user")
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  user_id     String    @db.Uuid
+  token_hash  String    @unique
+  expires_at  DateTime  @db.Timestamptz(6)
+  consumed_at DateTime? @db.Timestamptz(6)
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Restrict)
+
+  @@index([user_id, expires_at])
+  @@map("password_resets")
+}
+
+model Course {
+  id            String       @id @default(uuid()) @db.Uuid
+  instructor_id String       @db.Uuid
+  title         String
+  description   String
+  category      String       @default("General")
+  price_minor   Int
+  currency      String       @default("ETB")
+  published     Boolean      @default(false)
+  archived_at   DateTime?    @db.Timestamptz(6)
+  created_at    DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
+  instructor    User         @relation(fields: [instructor_id], references: [id], onDelete: Restrict)
+  lessons       Lesson[]
+  enrollments   Enrollment[]
+  payments      Payment[]
+  assessments   Assessment[]
+
+  @@index([instructor_id])
+  @@index([published, created_at])
+  @@map("courses")
+}
+
+model Assessment {
+  id          String   @id @default(uuid()) @db.Uuid
+  course_id   String   @db.Uuid
+  title       String
+  kind        String
+  prompt      String
+  questions   Json     @default("[]")
+  max_score   Int      @default(100)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  course      Course   @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  submissions AssessmentSubmission[]
+
+  @@index([course_id])
+  @@map("assessments")
+}
+
+model AssessmentSubmission {
+  id            String   @id @default(uuid()) @db.Uuid
+  assessment_id String   @db.Uuid
+  student_id    String   @db.Uuid
+  answer        String
+  submitted_at  DateTime @default(now()) @db.Timestamptz(6)
+  score         Int?
+  feedback      String?
+  reviewed_at   DateTime? @db.Timestamptz(6)
+  assessment    Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
+  student       User @relation(fields: [student_id], references: [id], onDelete: Restrict)
+
+  @@unique([assessment_id, student_id])
+  @@index([student_id])
+  @@map("assessment_submissions")
+}
+
+model Lesson {
+  id           String             @id @default(uuid()) @db.Uuid
+  course_id    String             @db.Uuid
+  title        String
+  position     Int
+  kind         String
+  preview      Boolean            @default(false)
+  content      String             @default("")
+  storage_path String?
+  quiz         Json?
+  course       Course             @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  progress     LearningProgress[]
+
+  @@unique([course_id, position], map: "lessons_course_id_position_key")
+  @@map("lessons")
+}
+
+model Payment {
+  id              String       @id @default(uuid()) @db.Uuid
+  user_id         String       @db.Uuid
+  course_id       String       @db.Uuid
+  tx_ref          String       @unique
+  amount_minor    Int
+  currency        String
+  status          String       @default("PENDING")
+  idempotency_key String       @db.Uuid
+  checkout_url    String?
+  provider_ref    String?      @unique
+  created_at      DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  course          Course       @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  enrollments     Enrollment[]
+  refund          Refund?
+
+  @@unique([user_id, idempotency_key], map: "payments_user_id_idempotency_key_key")
+  @@index([user_id, course_id, status])
+  @@map("payments")
+}
+
+model Enrollment {
+  id          String             @id @default(uuid()) @db.Uuid
+  user_id     String             @db.Uuid
+  course_id   String             @db.Uuid
+  payment_id  String?            @db.Uuid
+  status      String             @default("ACTIVE")
+  created_at  DateTime           @default(now()) @db.Timestamptz(6)
+  user        User               @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  course      Course             @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  payment     Payment?           @relation(fields: [payment_id], references: [id], onDelete: Restrict)
+  entitlement CourseEntitlement?
+
+  @@unique([user_id, course_id], map: "enrollments_user_id_course_id_key")
+  @@index([payment_id])
+  @@map("enrollments")
+}
+
+model CourseEntitlement {
+  id            String           @id @default(uuid()) @db.Uuid
+  enrollment_id String           @unique @db.Uuid
+  state         EntitlementState @default(ACTIVE)
+  granted_at    DateTime         @default(now()) @db.Timestamptz(6)
+  revoked_at    DateTime?        @db.Timestamptz(6)
+  enrollment    Enrollment       @relation(fields: [enrollment_id], references: [id], onDelete: Cascade)
+
+  @@map("course_entitlements")
+}
+
+model LearningProgress {
+  user_id      String   @db.Uuid
+  lesson_id    String   @db.Uuid
+  completed_at DateTime @default(now()) @db.Timestamptz(6)
+  score        Int?
+  user         User     @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  lesson       Lesson   @relation(fields: [lesson_id], references: [id], onDelete: Restrict)
+
+  @@id([user_id, lesson_id])
+  @@map("progress")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actor_id   String?  @db.Uuid
+  action     String
+  target_id  String?  @db.Uuid
+  reason     String?
+  actor_name String?
+  actor_role String?
+  resource_type String?
+  resource_id String? @db.Uuid
+  description String?
+  old_values Json?
+  new_values Json?
+  metadata Json?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  actor      User?    @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+
+  @@index([target_id, created_at])
+  @@index([action, created_at])
+  @@map("audit_logs")
+}
+
+model Refund {
+  id           String   @id @default(uuid()) @db.Uuid
+  payment_id   String   @unique @db.Uuid
+  reference    String   @unique
+  provider_ref String?  @unique
+  status       String   @default("REQUESTED")
+  actor_id     String   @db.Uuid
+  reason       String
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  payment      Payment  @relation(fields: [payment_id], references: [id], onDelete: Restrict)
+  actor        User     @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+
+  @@map("refunds")
+}
+
+model LegacySchemaMigration {
+  name       String   @id
+  checksum   String
+  applied_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("schema_migrations")
+}

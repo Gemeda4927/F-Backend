@@ -1,119 +1,296 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Learnova backend ? NestJS, Prisma and PostgreSQL
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Prisma ORM **7.10.1** is used for all application database reads, writes,
+counts, relationships and transactions. The Next.js API contracts are unchanged.
+Node.js 24 and PostgreSQL 17+ are required.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Layout
 
-## Description
+- `prisma/schema.prisma`: mapped User, Role, Permission, RolePermission,
+  AuthSession, StudentDevice, Course, Lesson, Enrollment, Payment,
+  CourseEntitlement, LearningProgress, PasswordResetToken, Refund and AuditLog.
+- `prisma/migrations/`: version-controlled Prisma migration history.
+- `prisma/seed.ts`: idempotent permission configuration, legacy relationship
+  backfill and optional private owner bootstrap.
+- `prisma.config.ts`: Prisma 7 CLI datasource, shadow database and seed configuration.
+- `src/prisma/`: global NestJS PrismaModule and reusable injected PrismaService.
+- `src/generated/prisma/`: generated ESM TypeScript client, ignored by Git.
+- `src/modules/`: auth, users, roles, devices, courses, lessons, enrollments,
+  payments, dashboard, health and original greeting.
+- `src/common/`: cookie authentication, database-backed permissions, origin
+  protection, sanitized Prisma errors and no-store responses.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Prisma 7 uses the PostgreSQL driver adapter. PostgreSQL connection pooling and
+certificate-verified TLS are configured in PrismaService. No TypeORM, Sequelize,
+hand-written SQL CRUD, raw Prisma queries or custom SQL migration runner remains.
 
-## Project setup
+## Install and generate
 
-```bash
-$ npm install
+```sh
+npm ci
+cp .env.example .env
+npx prisma generate
 ```
 
-## Compile and run the project
+PowerShell: `Copy-Item .env.example .env`. Merge an existing environment file
+instead of overwriting credentials. Set DATABASE_URL to your actual database,
+using your local PostgreSQL or hosted database connection. For hosted pooling, set DIRECT_URL to the corresponding direct connection.
+Generation does not create tables or require database access.
+`npm run build` regenerates the client before compiling NestJS.
 
-```bash
-# development
-$ npm run start
+## New development database
 
-# watch mode
-$ npm run start:dev
+The committed migrations already contain the initial schema and the Prisma
+RBAC/entitlement upgrade. For a fresh Neon development database (with a separate disposable shadow database):
 
-# production mode
-$ npm run start:prod
+```sh
+npx prisma migrate dev
+npx prisma db seed
+npm run start:dev
 ```
 
-## Run tests
+For future model changes, edit schema.prisma, generate a migration without
+applying it, inspect its generated SQL, then apply:
 
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+```sh
+npx prisma migrate dev --name describe_the_change --create-only
+npx prisma migrate dev
+npx prisma generate
 ```
 
-## Deployment
+In a new project with no committed migration history, the equivalent initial
+command is `npx prisma migrate dev --name init`. Do not generate another init
+migration to replace this repository's history.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Development migration tooling needs a disposable shadow database. Use an account
+allowed to create one, or supply a separate SHADOW_DATABASE_URL.
+Never point the shadow URL at your application database.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Existing database ? preserve records
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+The prior tables and snake_case columns are mapped in Prisma; they are not
+renamed or recreated. Existing textual role/status columns are retained for
+compatibility rather than destructively converted to native enums.
+Normalized role names, permission scopes and entitlement states use native
+Prisma/PostgreSQL enums. User.role_id is a backfilled role relationship; the
+legacy role field remains synchronized for the existing frontend API.
+
+The generated `000_legacy_baseline` captures the previous schema. The generated
+`add_prisma_rbac_entitlements` migration adds role/permission/entitlement tables,
+nullable role links, a defaulted concurrency counter and indexes. It replaces
+foreign-key definitions without dropping tables, columns or user records.
+The old schema_migrations records remain mapped as LegacySchemaMigration for
+audit history; Prisma now owns future migrations in _prisma_migrations.
+
+For an existing installation:
+
+1. Back up the database and test the upgrade on a restored copy.
+2. Inspect `npx prisma db pull --print` and compare the existing schema to
+   `prisma/migrations/000_legacy_baseline/migration.sql`.
+3. Only if the old baseline matches, mark it applied; do not execute its CREATE
+   TABLE statements against populated tables.
+4. Review the generated upgrade and deploy, then run the safe configuration seed.
+
+```sh
+npx prisma migrate resolve --applied 000_legacy_baseline
+npx prisma migrate deploy
+npx prisma db seed
+npx prisma migrate status
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Do not baseline an unrelated or partially matching database. Resolve drift first.
+The upgrade briefly locks affected tables while changing foreign keys; schedule
+an appropriate maintenance window on a large installation.
+Seeding is required before serving the upgraded API so old users receive their
+role links and old enrollments receive matching entitlements.
 
-## Observability
+Never use migrate reset on important data. Never use db push as production
+migration management. Never edit an applied migration. Both committed SQL files
+were generated by Prisma tooling, not authored as SQL scripts.
 
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
+## Seeding and first owner
 
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
+The seed creates roles and initial permission links only when the role is new.
+It does not re-add permissions deliberately removed from existing roles,
+overwrite passwords, delete users, modify payments, or reactivate revoked
+entitlements. Missing user role links and missing enrollment entitlements are
+backfilled through Prisma.
 
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
+To create the first Super Admin, temporarily set BOOTSTRAP_EMAIL and a strong
+BOOTSTRAP_PASSWORD in your shell and run:
 
-This project is already instrumented. Create a free account at [observe.nestjs.com](https://observe.nestjs.com), add an application, and paste the generated app key and secret into the `ObserveModule.forRoot()` call in `src/app.module.ts`.
+```sh
+npx prisma db seed
+```
 
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
+No bootstrap variables means configuration-only seeding. Owner creation refuses
+if a Super Admin already exists. Remove bootstrap credentials afterward.
+Public registration creates only students; role changes require Super Admin.
 
-## Resources
+## Security and transactions
 
-Check out a few resources that may come in handy when working with NestJS:
+PrismaService.atomic uses interactive Serializable transactions with bounded
+retries for serialization conflicts. Login, device reset and recovery update
+a user concurrency counter through Prisma to serialize competing requests.
+The original partial unique index enforcing one active student device is modeled
+with Prisma 7's partialIndexes feature; it is generated for fresh databases too.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+Access cookies expire in 15 minutes. Refresh tokens rotate and are stored hashed,
+with an absolute 30-day session lifetime. Replayed refresh tokens revoke sessions.
+Every protected request validates the database session, device cookie, active
+account and role's stored permission links. Tokens are HTTP-only and are not
+returned to browser JavaScript.
 
-## Support
+Logout retains device registration. Audited admin resets and one-time email
+recovery revoke old sessions/devices without removing purchases.
+Cookie mutations require an allowed frontend Origin and auth routes are rate limited.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Course access requires both active enrollment and active CourseEntitlement.
+Paid enrollment also requires its matching successful payment. Instructors
+manage their own courses; admins have explicit management permissions.
+Full lesson content, quiz answers and private files are never included in public
+course metadata. Quizzes are graded on the backend; files are served only after
+authorization, including video range requests.
 
-## Stay in touch
+## Payments and refunds
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+Chapa checkout, payment verification, HMAC webhooks, ownership, amount/currency/
+customer matching and durable idempotency are preserved. Payment and refund
+network calls run outside retryable Prisma transactions to avoid repeating
+external money movements. Enrollment/payment/entitlement writes are atomic.
+Revocation and confirmed refund revoke entitlements together.
+Uncertain provider initialization/refund responses require reconciliation rather
+than blindly retrying a charge or refund.
 
-## License
+Provider documentation:
+[checkout](https://developer.chapa.co/integrations/accept-payments),
+[verification](https://developer.chapa.co/integrations/verify-payments),
+[webhooks](https://developer.chapa.co/integrations/webhooks),
+[refunds](https://developer.chapa.co/refund).
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
-"# F-Backend" 
+Configure the public HTTPS webhook at BACKEND_URL/api/v1/payments/webhook.
+Real payment, refund and mail delivery need your merchant and SMTP credentials.
+No real charge, refund or email is sent by automated tests.
+
+## Environment
+
+| Variable | Purpose |
+| --- | --- |
+| DATABASE_URL | Required Neon pooled PostgreSQL URI; never hardcode credentials |
+| DIRECT_URL | Neon direct connection URI for Prisma CLI migrations |
+| DATABASE_SSL | true for certificate-verified database TLS |
+| SHADOW_DATABASE_URL | Optional separate disposable database for migrate dev |
+| PORT | API listener, default 5000 |
+| FRONTEND_URL / BACKEND_URL | Required browser/public API origins without trailing slash |
+| CORS_ORIGINS | Comma-separated exact allowed browser origins |
+| JWT_ACCESS_SECRET / JWT_REFRESH_SECRET | Different random secrets, at least 32 characters each |
+| COOKIE_SECURE | true for HTTPS; false only locally |
+| COOKIE_SAME_SITE | lax normally; none requires secure HTTPS cookies |
+| APP_ENV | development locally; production enforces HTTPS, secure cookies and live Chapa mode |
+| CHAPA_MODE / CHAPA_SECRET_KEY / CHAPA_WEBHOOK_SECRET | Provider mode and private credentials |
+| SMTP_HOST / SMTP_PORT / SMTP_SECURE | Recovery mail transport |
+| SMTP_USER / SMTP_PASSWORD / MAIL_FROM | Mail credentials and sender |
+| PRIVATE_STORAGE_DIR | Non-public material storage directory |
+| BOOTSTRAP_EMAIL / BOOTSTRAP_PASSWORD | Optional one-time owner seed |
+| TEST_DATABASE_URL | Dedicated disposable security-test database only |
+
+The existing .env has not been overwritten.
+Generate signing secrets using Node crypto; do not commit environment files.
+Prefer same-site HTTPS frontend/API domains; cross-site cookies depend on browser policy.
+
+## API compatibility
+
+Versioned API: http://localhost:5000/api/v1.
+Swagger: http://localhost:5000/api/docs.
+Original GET / and GET /health remain. Database readiness checks Prisma at
+GET /api/v1/health/database.
+
+Auth, users, devices, courses, lessons, enrollments, payments, refunds, progress
+and dashboard routes retain their existing payloads. The frontend continues
+to consume NestJS directly; it has no frontend API routes.
+
+## Checks
+
+```sh
+npx prisma validate
+npx prisma generate
+npm run build
+npm run lint
+npm run typecheck
+npm test
+npm run test:postgres
+```
+
+test:postgres creates a temporary native PostgreSQL instance, runs Prisma deploy
+twice and exercises the API against real PostgreSQL with payment/email doubles.
+The security suite uses Prisma for fixture setup and assertions and checks
+safe repeated seeding and database-controlled permission changes.
+test:e2e skips database tests unless TEST_DATABASE_URL points to a dedicated
+freshman_test_platform database; it deletes test records only in that named database.
+Do not point it at a production database. A non-local disposable test service
+also requires `TEST_DATABASE_ALLOW_REMOTE=true`; tests never create
+operating-system users. The temporary-cluster runner explicitly overrides both
+`DATABASE_URL` and `DIRECT_URL` so Prisma cannot inherit a remote migration URL.
+
+## Student administration and audit history
+
+Super Admin student administration uses `/api/v1/admin/students` and the
+corresponding paginated courses, payments, devices, and audit-history routes.
+Profile, status, device, session, and course-access changes record their actor
+and reason. A complimentary administrative course grant is separate from
+payment verification and does not create or change a payment record. Audit
+history has no API update or delete endpoint; access requires the configured
+administrative permissions. Application-level restrictions do not prevent a
+database owner from changing records directly.
+
+The migration adds nullable audit details, student phone and last-login fields,
+and a suspension flag. Existing rows are retained. Events and verification
+times that were never recorded cannot be reconstructed; the UI reports them as
+not recorded. Older payment audit events are associated with their students when
+their referenced payment is available. Phone and email changes are identified
+without storing their values in new audit records.
+
+## Production deployment
+
+Install build dependencies, generate the client, and build the application:
+
+```sh
+npm ci
+npm run build
+npx prisma migrate deploy
+npx prisma db seed
+npm run start:prod
+```
+
+Back up and baseline an existing database before deployment using the procedure
+above. Use migrate deploy for production. Keep Prisma CLI and seed tooling
+available in the deployment job. Run Node.js 24 under a process manager or
+hosting service and configure HTTPS, live gateway keys, SMTP, Neon backups,
+monitoring and persistent private material storage. Multiple replicas need
+shared storage and a shared Throttler storage adapter.
+
+## Independent Git
+
+Backend history, main branch and origin
+https://github.com/Gemeda4927/F-Backend.git are preserved. No commits, pushes,
+root Git repository or mixed frontend/backend history were created.
+
+## Neon database connections
+
+Set `DATABASE_URL` to the Neon pooled connection string for application queries. Set `DIRECT_URL` to the same database using its direct hostname for Prisma CLI migrations. Preserve `sslmode=require` and `channel_binding=require`. NestJS reads these values from `backend/.env`. The application uses Neon; no local database service is required. Never run reset against Neon data. Existing databases require the baseline procedure above before deployment.
+
+## Sample accounts
+
+Set a private `SEED_ACCOUNT_PASSWORD` in `.env`, then run `npm run db:seed:accounts`. This creates student1@learnova.example through student10@learnova.example, instructor1@learnova.example through instructor5@learnova.example, and superadmin@learnova.example if no owner exists. Existing accounts and passwords are preserved. Repeated runs do not duplicate accounts. These reserved example addresses cannot receive recovery emails; use real addresses for operational accounts. Remove sample accounts before production.
+
+## Assessments and course archives
+
+Instructors create written exams and assignments with one or more questions. Enrolled students can submit once; the course owner reviews the response and records an overall score and feedback. Edits are blocked once submissions exist. Archived courses are removed from the catalog and new enrollment paths, while existing enrolled students retain access. The API uses owner and course-access checks; the interface does not replace authorization.
+
+## Environment and deployment
+
+Copy `.env.example` to `.env` without overwriting an existing file. Configure DATABASE_URL, DIRECT_URL if required, FRONTEND_URL, CORS_ORIGINS, PORT, independent JWT secrets, cookie settings, and any Chapa and SMTP settings used by the deployment. Never commit credentials. Apply reviewed migrations with `npm run db:deploy`, generate the client with `npm run prisma:generate`, and run `npm run build` followed by `npm run start:prod`. The Swagger UI is available at `/api/docs` when the server is running.
+
+## Troubleshooting
+
+For migration connection failures, verify PostgreSQL availability and DIRECT_URL; do not reset a populated database. For browser authentication failures, check allowed origins, cookie security and same-site settings, and time synchronization. A payment redirect is not proof of payment: the server verifies provider results before granting an entitlement. Run `npm test`, `npm run test:e2e`, `npm run typecheck`, and `npm run lint` as appropriate.
