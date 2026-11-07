@@ -59,6 +59,7 @@ class LessonsController {
         preview: true,
         content: true,
         quiz: true,
+        practice: true,
       },
       orderBy: { position: 'asc' },
     });

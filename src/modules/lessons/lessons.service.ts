@@ -9,6 +9,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import type { CurrentUser } from '../../common/types.js';
 import { CoursesService } from '../courses/courses.service.js';
 import type { LessonDto, QuestionDto } from './lessons.dto.js';
+import { notifyCourse } from '../notifications/notifications.js';
 @Injectable()
 export class LessonsService {
   constructor(
@@ -60,6 +61,8 @@ export class LessonsService {
   }
   async save(user: CurrentUser, courseId: string, dto: LessonDto, id?: string) {
     await this.courses.assertOwner(user, courseId);
+    if (dto.practice && dto.kind !== 'QUIZ')
+      throw new BadRequestException('Practice tests must use quiz questions');
     if (
       dto.kind === 'QUIZ' &&
       (!dto.quiz?.length ||
@@ -81,15 +84,35 @@ export class LessonsService {
         where: { id, course_id: courseId },
       });
       if (!existing) throw new NotFoundException();
-      return this.db.lesson.update({
-        where: { id },
-        data,
-        select: { id: true },
+      return this.db.atomic(async (tx) => {
+        const updated = await tx.lesson.update({
+          where: { id },
+          data,
+          select: { id: true },
+        });
+        await notifyCourse(tx, courseId, {
+          event_key: `lesson-update:${id}:${new Date().toISOString()}`,
+          kind: 'CONTENT',
+          title: `Lesson updated: ${dto.title}`,
+          message: 'Your instructor updated this learning activity.',
+          href: `/learn/${courseId}/activities/${id}?type=lesson`,
+        });
+        return updated;
       });
     }
-    return this.db.lesson.create({
-      data: { ...data, course_id: courseId },
-      select: { id: true },
+    return this.db.atomic(async (tx) => {
+      const lesson = await tx.lesson.create({
+        data: { ...data, course_id: courseId },
+        select: { id: true },
+      });
+      await notifyCourse(tx, courseId, {
+        event_key: `lesson:${lesson.id}`,
+        kind: dto.kind === 'QUIZ' ? 'QUIZ' : 'CONTENT',
+        title: `New ${dto.practice ? 'practice test' : dto.kind === 'QUIZ' ? 'quiz' : 'lesson'}: ${dto.title}`,
+        message: 'New learning content is available.',
+        href: `/learn/${courseId}/activities/${lesson.id}?type=lesson`,
+      });
+      return lesson;
     });
   }
   async progress(user: CurrentUser, courseId: string) {
@@ -100,6 +123,10 @@ export class LessonsService {
     });
   }
   async complete(user: CurrentUser, id: string, answers?: number[]) {
+    if (user.role !== 'STUDENT')
+      throw new ForbiddenException(
+        'Only student accounts record learning progress',
+      );
     const lesson = await this.authorized(user, id);
     if (!(await this.courses.canAccess(user, lesson.course_id)))
       throw new ForbiddenException('Enrollment required');
@@ -112,13 +139,39 @@ export class LessonsService {
         (100 * quiz.filter((q, i) => q.correctIndex === answers[i]).length) /
           quiz.length,
       );
+      if (
+        answers.some(
+          (answer, i) =>
+            !Number.isInteger(answer) ||
+            answer < 0 ||
+            answer >= quiz[i].options.length,
+        )
+      )
+        throw new BadRequestException(
+          'Select a valid answer for every question',
+        );
       if (score < 70) return { passed: false, score };
     }
-    await this.db.learningProgress.upsert({
-      where: { user_id_lesson_id: { user_id: user.id, lesson_id: id } },
-      create: { user_id: user.id, lesson_id: id, score },
-      update: { score, completed_at: new Date() },
+    await this.db.atomic(async (tx) => {
+      if (!(await this.courses.canAccess(user, lesson.course_id, tx)))
+        throw new ForbiddenException('Enrollment required');
+      return tx.learningProgress.upsert({
+        where: { user_id_lesson_id: { user_id: user.id, lesson_id: id } },
+        create: { user_id: user.id, lesson_id: id, score },
+        update: { score, completed_at: new Date() },
+      });
     });
-    return { passed: true, score };
+    return {
+      passed: true,
+      score,
+      explanations:
+        lesson.kind === 'QUIZ'
+          ? (lesson.quiz as unknown as QuestionDto[]).map((q) => ({
+              question: q.question,
+              correctIndex: q.correctIndex,
+              explanation: q.explanation ?? '',
+            }))
+          : [],
+    };
   }
 }

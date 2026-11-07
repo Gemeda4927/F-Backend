@@ -27,7 +27,8 @@
     "prebuild": "prisma generate",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
-    "db:seed:accounts": "tsx prisma/seed-accounts.ts"
+    "db:seed:accounts": "tsx prisma/seed-accounts.ts",
+    "db:seed:critical-thinking": "tsx prisma/seed-critical-thinking.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

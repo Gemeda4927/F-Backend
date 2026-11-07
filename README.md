@@ -285,7 +285,19 @@ Set a private `SEED_ACCOUNT_PASSWORD` in `.env`, then run `npm run db:seed:accou
 
 ## Assessments and course archives
 
-Instructors create written exams and assignments with one or more questions. Enrolled students can submit once; the course owner reviews the response and records an overall score and feedback. Edits are blocked once submissions exist. Archived courses are removed from the catalog and new enrollment paths, while existing enrolled students retain access. The API uses owner and course-access checks; the interface does not replace authorization.
+Instructors create written exams and assignments with one or more questions. One attempt is the default; instructors can configure up to ten attempts, opening/deadline times, timed exams, assignment attachments, and grade publication. Start and submission requests recheck enrollment/payment access, availability, expiry and attempt ownership in serializable transactions. An expired attempt consumes a slot; late submissions are rejected rather than silently submitted. Submissions retain an attempt history, and resubmission resets the latest grade. Edits are blocked once attempts or submissions exist. Result publication is a separate owner/admin action; unpublished scores and feedback are omitted from learner responses. Exam questions are withheld until an attempt starts. Archived courses are removed from discovery while existing entitled learners retain access.
+
+Assignment attachments accept PDF or UTF-8 plain text up to 5 MB with signature/content validation. Files are stored in PostgreSQL and downloaded as attachments after checking the student or course owner/admin and current course access. No public file URL is exposed. Quiz explanations are available after a passing score; normal quizzes and practice tests allow retries and require 70% for completion.
+
+## Notifications and course workspace
+
+The learning workspace has shareable activity URLs and ten horizontal sections. Lessons marked `practice` appear under Practice Tests; PDF/video lessons also appear under Learning Materials. Resources use the existing course contributions workflow. No content or completion is simulated.
+
+`GET /notifications` returns a paginated, user-scoped inbox (`unread=true`, optional UUID `cursor`). Read status is stored in PostgreSQL. `PATCH /notifications/:id/read` and `/notifications/read-all` only affect authorized inbox entries. Course enrollment, entitlement, payment, and publication are rechecked when reading notifications, so revoking access also hides related inbox content. New lessons/quizzes, assessments, submissions, grading, published results, course updates and announcements create notifications transactionally. Course owners/admins can post `/notifications/course/:courseId`; account administrators can post `/notifications/system`.
+
+The frontend refreshes notifications every 60 seconds while visible and when focused. Deadline reminders are generated idempotently during inbox refresh for unsubmitted activities due in the next 24 hours. They are in-app reminders, not background email or push delivery.
+
+Deploy migration `20261107120000_learning_experience` with `npm run db:deploy`, deploy the backend, then deploy the frontend. This additive migration preserves existing courses, submissions, and grades. Do not run a database reset or the sample course seed as part of deployment. The optional `npm run db:seed:critical-thinking` command only expands the named sample course and refuses to overwrite lessons with recorded progress or assessments with submissions.
 
 ## Course visibility
 

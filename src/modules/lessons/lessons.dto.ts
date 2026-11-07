@@ -15,6 +15,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 export class QuestionDto {
+  @IsOptional() @IsString() @MaxLength(2000) explanation?: string;
   @IsString() @MinLength(3) @MaxLength(1000) question!: string;
   @IsArray()
   @ArrayMinSize(2)
@@ -24,6 +25,7 @@ export class QuestionDto {
   @IsInt() @Min(0) @Max(5) correctIndex!: number;
 }
 export class LessonDto {
+  @IsOptional() @IsBoolean() practice?: boolean;
   @IsString() @MinLength(2) @MaxLength(160) title!: string;
   @IsInt() @Min(0) @Max(10000) position!: number;
   @IsIn(['TEXT', 'VIDEO', 'PDF', 'QUIZ']) kind!: string;

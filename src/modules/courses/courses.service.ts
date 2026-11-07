@@ -7,6 +7,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { CurrentUser } from '../../common/types.js';
 import type { CourseDto } from './courses.dto.js';
+import { notifyCourse } from '../notifications/notifications.js';
 @Injectable()
 export class CoursesService {
   constructor(private readonly db: PrismaService) {}
@@ -56,6 +57,7 @@ export class CoursesService {
             title: true,
             position: true,
             kind: true,
+            practice: true,
             preview: true,
           },
           orderBy: { position: 'asc' },
@@ -83,6 +85,7 @@ export class CoursesService {
             title: true,
             position: true,
             kind: true,
+            practice: true,
             preview: true,
           },
           orderBy: { position: 'asc' },
@@ -185,6 +188,7 @@ export class CoursesService {
             title: true,
             position: true,
             kind: true,
+            practice: true,
             preview: true,
           },
           orderBy: { position: 'asc' },
@@ -216,7 +220,17 @@ export class CoursesService {
   }
   async update(user: CurrentUser, id: string, dto: CourseDto) {
     await this.assertOwner(user, id);
-    return this.db.course.update({ where: { id }, data: dto });
+    return this.db.atomic(async (tx) => {
+      const updated = await tx.course.update({ where: { id }, data: dto });
+      await notifyCourse(tx, id, {
+        event_key: `course:${id}:${updated.updated_at.toISOString()}`,
+        kind: 'COURSE',
+        title: `Course updated: ${updated.title}`,
+        message: 'Your instructor updated the course information.',
+        href: `/learn/${id}?tab=overview`,
+      });
+      return updated;
+    });
   }
   async canAccess(
     user: CurrentUser,

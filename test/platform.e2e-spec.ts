@@ -114,7 +114,10 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       db.contributionVote.deleteMany(),
       db.contribution.deleteMany(),
       db.contributionCreditConfig.deleteMany(),
+      db.notification.deleteMany(),
+      db.assessmentAttempt.deleteMany(),
       db.assessmentSubmission.deleteMany(),
+      db.assessmentFile.deleteMany(),
       db.assessment.deleteMany(),
       db.refund.deleteMany(),
       db.auditLog.deleteMany(),
@@ -1227,5 +1230,383 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         await db.auditLog.findUnique({ where: { id: event.id } }),
       ).not.toBeNull();
     });
+  });
+  it('enforces learning deadlines, timers, attachments, attempts, results, and notification ownership', async () => {
+    const members: Record<string, ReturnType<typeof request.agent>> = {};
+    const userIds: Record<string, string> = {};
+    for (const [key, role] of [
+      ['author', 'INSTRUCTOR'],
+      ['learner', 'STUDENT'],
+      ['outsider', 'STUDENT'],
+    ] as const) {
+      const id = randomUUID();
+      userIds[key] = id;
+      const email = key + '-learning@freshman.test';
+      await db.user.create({
+        data: {
+          id,
+          email,
+          name: 'Learning ' + key,
+          role,
+          role_id: role,
+          password_hash: await bcrypt.hash(password, 4),
+        },
+      });
+      members[key] = request.agent(app.getHttpServer());
+      await call(members[key], 'post', '/auth/login')
+        .send({ email, password })
+        .expect(200);
+    }
+    const course = await db.course.create({
+      data: {
+        title: 'Learning experience tests',
+        description: 'Isolated course for learning workflow tests',
+        instructor_id: userIds.author,
+        published: true,
+        visibility: 'PUBLIC',
+        price_minor: 0,
+      },
+    });
+    await call(
+      members.learner,
+      'post',
+      '/enrollments/' + course.id + '/free',
+    ).expect(201);
+    const create = (data: object) =>
+      call(members.author, 'post', '/assessments/course/' + course.id).send({
+        title: 'Written activity',
+        kind: 'ASSIGNMENT',
+        prompt: 'Explain your reasoning.',
+        questions: ['What evidence supports your conclusion?'],
+        max_score: 100,
+        ...data,
+      });
+    const created = await create({
+      allow_files: true,
+      max_attempts: 2,
+      results_published: false,
+      due_at: new Date(Date.now() + 3600000).toISOString(),
+    }).expect(201);
+    const a = created.body;
+    await call(members.outsider, 'get', '/assessments/' + a.id).expect(403);
+    await call(
+      members.author,
+      'post',
+      '/assessments/' + a.id + '/start',
+    ).expect(403);
+    const notices = await call(members.learner, 'get', '/notifications').expect(
+      200,
+    );
+    expect(
+      notices.body.items.some((n: { kind: string }) => n.kind === 'ASSIGNMENT'),
+    ).toBe(true);
+    expect(
+      notices.body.items.some((n: { kind: string }) => n.kind === 'DEADLINE'),
+    ).toBe(true);
+    const noticeId = notices.body.items[0].id;
+    await call(
+      members.outsider,
+      'patch',
+      '/notifications/' + noticeId + '/read',
+    ).expect(404);
+    await call(
+      members.learner,
+      'patch',
+      '/notifications/' + noticeId + '/read',
+    ).expect(200);
+    const count = await db.notification.count({
+      where: { user_id: userIds.learner },
+    });
+    await call(members.learner, 'get', '/notifications').expect(200);
+    expect(
+      await db.notification.count({ where: { user_id: userIds.learner } }),
+    ).toBe(count);
+    const starts = await Promise.all([
+      call(members.learner, 'post', '/assessments/' + a.id + '/start'),
+      call(members.learner, 'post', '/assessments/' + a.id + '/start'),
+    ]);
+    expect(starts.map((r) => r.status)).toEqual([201, 201]);
+    expect(starts[0].body.id).toBe(starts[1].body.id);
+    await call(members.learner, 'post', '/assessments/' + a.id + '/attachment')
+      .attach('file', Buffer.from('invalid'), {
+        filename: 'invalid.pdf',
+        contentType: 'application/pdf',
+      })
+      .expect(400);
+    const file = await call(
+      members.learner,
+      'post',
+      '/assessments/' + a.id + '/attachment',
+    )
+      .attach(
+        'file',
+        Buffer.from('My written response with supporting evidence.'),
+        { filename: 'response.txt', contentType: 'text/plain' },
+      )
+      .expect(201);
+    await call(
+      members.outsider,
+      'get',
+      '/assessments/attachments/' + file.body.id,
+    ).expect(403);
+    const answer = {
+      answers: ['Independent evidence supports the claim.'],
+      expected_questions: a.questions,
+      expected_prompt: a.prompt,
+      expected_max_score: a.max_score,
+      attempt_id: starts[0].body.id,
+      attachment_id: file.body.id,
+    };
+    const submitted = await call(
+      members.learner,
+      'post',
+      '/assessments/' + a.id + '/submit',
+    )
+      .send(answer)
+      .expect(201);
+    await call(members.learner, 'post', '/assessments/' + a.id + '/submit')
+      .send(answer)
+      .expect(409);
+    await call(
+      members.author,
+      'patch',
+      '/assessments/submissions/' + submitted.body.id + '/review',
+    )
+      .send({
+        score: 85,
+        feedback: 'Good evidence and a clear conclusion.',
+        expected_attempt: 1,
+      })
+      .expect(200);
+    const hidden = await call(
+      members.learner,
+      'get',
+      '/assessments/' + a.id,
+    ).expect(200);
+    expect(hidden.body.submissions[0].score).toBeNull();
+    expect(hidden.body.submissions[0].feedback).toBeNull();
+    await call(members.outsider, 'patch', '/assessments/' + a.id + '/results')
+      .send({ results_published: true })
+      .expect(403);
+    await call(members.author, 'patch', '/assessments/' + a.id + '/results')
+      .send({ results_published: true })
+      .expect(200);
+    expect(
+      (await call(members.learner, 'get', '/assessments/' + a.id).expect(200))
+        .body.submissions[0].score,
+    ).toBe(85);
+    const retry = await call(
+      members.learner,
+      'post',
+      '/assessments/' + a.id + '/start',
+    ).expect(201);
+    await call(members.learner, 'post', '/assessments/' + a.id + '/submit')
+      .send({ ...answer, attachment_id: undefined, attempt_id: retry.body.id })
+      .expect(201);
+    await call(
+      members.author,
+      'patch',
+      '/assessments/submissions/' + submitted.body.id + '/review',
+    )
+      .send({ score: 90, feedback: 'Stale review', expected_attempt: 1 })
+      .expect(409);
+    await call(
+      members.learner,
+      'post',
+      '/assessments/' + a.id + '/start',
+    ).expect(409);
+    expect(
+      await db.assessmentAttempt.count({
+        where: { assessment_id: a.id, student_id: userIds.learner },
+      }),
+    ).toBe(2);
+    const future = await create({
+      opens_at: new Date(Date.now() + 3600000).toISOString(),
+    }).expect(201);
+    await call(
+      members.learner,
+      'post',
+      '/assessments/' + future.body.id + '/start',
+    ).expect(403);
+    const closed = await create({
+      due_at: new Date(Date.now() - 1000).toISOString(),
+    }).expect(201);
+    await call(
+      members.learner,
+      'post',
+      '/assessments/' + closed.body.id + '/submit',
+    )
+      .send({ answer: 'Too late' })
+      .expect(403);
+    const timed = await create({ kind: 'EXAM', duration_minutes: 1 }).expect(
+      201,
+    );
+    await call(
+      members.learner,
+      'post',
+      '/assessments/' + timed.body.id + '/submit',
+    )
+      .send({ answer: 'Not started' })
+      .expect(409);
+    const unstarted = await call(
+      members.learner,
+      'get',
+      '/assessments/' + timed.body.id,
+    ).expect(200);
+    expect(unstarted.body.questions).toEqual([]);
+    expect(unstarted.body.question_count).toBe(1);
+    const timer = await call(
+      members.learner,
+      'post',
+      '/assessments/' + timed.body.id + '/start',
+    ).expect(201);
+    expect(timer.body.expires_at).toBeTruthy();
+    expect(
+      (
+        await call(
+          members.learner,
+          'get',
+          '/assessments/' + timed.body.id,
+        ).expect(200)
+      ).body.questions,
+    ).toHaveLength(1);
+    await db.assessmentAttempt.update({
+      where: { id: timer.body.id },
+      data: { expires_at: new Date(Date.now() - 1000) },
+    });
+    await call(
+      members.learner,
+      'post',
+      '/assessments/' + timed.body.id + '/submit',
+    )
+      .send({ ...answer, attachment_id: undefined, attempt_id: timer.body.id })
+      .expect(403);
+    await call(members.author, 'post', '/notifications/course/' + course.id)
+      .send({
+        title: 'Welcome learners',
+        message: 'Read the lesson before starting your work.',
+      })
+      .expect(201);
+    const instructorNotices = await call(
+      members.author,
+      'get',
+      '/notifications',
+    ).expect(200);
+    expect(
+      instructorNotices.body.items.some(
+        (n: { kind: string }) => n.kind === 'SUBMISSION',
+      ),
+    ).toBe(true);
+    const quiz = await call(
+      members.author,
+      'post',
+      '/lessons/course/' + course.id,
+    )
+      .send({
+        title: 'Reasoning practice',
+        position: 0,
+        kind: 'QUIZ',
+        practice: true,
+        preview: false,
+        content: 'Choose the supported conclusion.',
+        quiz: [
+          {
+            question: 'What should evidence support?',
+            options: ['The conclusion', 'The font choice'],
+            correctIndex: 0,
+            explanation: 'Reasons and evidence should support the conclusion.',
+          },
+        ],
+      })
+      .expect(201);
+    const safeQuiz = await call(
+      members.learner,
+      'get',
+      '/lessons/' + quiz.body.id,
+    ).expect(200);
+    expect(safeQuiz.body.practice).toBe(true);
+    expect(safeQuiz.body.quiz[0]).not.toHaveProperty('correctIndex');
+    expect(safeQuiz.body.quiz[0]).not.toHaveProperty('explanation');
+    await call(members.author, 'post', '/lessons/' + quiz.body.id + '/quiz')
+      .send({ answers: [0] })
+      .expect(403);
+    await call(members.learner, 'post', '/lessons/' + quiz.body.id + '/quiz')
+      .send({ answers: [-1] })
+      .expect(400);
+    const failedQuiz = await call(
+      members.learner,
+      'post',
+      '/lessons/' + quiz.body.id + '/quiz',
+    )
+      .send({ answers: [1] })
+      .expect(201);
+    expect(failedQuiz.body.passed).toBe(false);
+    expect(failedQuiz.body).not.toHaveProperty('explanations');
+    const passedQuiz = await call(
+      members.learner,
+      'post',
+      '/lessons/' + quiz.body.id + '/quiz',
+    )
+      .send({ answers: [0] })
+      .expect(201);
+    expect(passedQuiz.body.passed).toBe(true);
+    expect(passedQuiz.body.explanations[0].explanation).toContain('support');
+    await db.notification.createMany({
+      data: Array.from({ length: 55 }, (_, i) => ({
+        user_id: userIds.learner,
+        event_key: 'paging-' + i,
+        kind: 'SYSTEM',
+        title: 'Inbox pagination test',
+        message: 'Test notification in an isolated database.',
+        href: '/notifications',
+      })),
+    });
+    const firstPage = await call(
+      members.learner,
+      'get',
+      '/notifications?unread=true',
+    ).expect(200);
+    expect(firstPage.body.items).toHaveLength(50);
+    expect(firstPage.body.next_cursor).toBeTruthy();
+    const secondPage = await call(
+      members.learner,
+      'get',
+      '/notifications?unread=true&cursor=' + firstPage.body.next_cursor,
+    ).expect(200);
+    expect(secondPage.body.items.length).toBeGreaterThan(0);
+    expect(
+      secondPage.body.items.some((n: { id: string }) =>
+        firstPage.body.items.some((p: { id: string }) => p.id === n.id),
+      ),
+    ).toBe(false);
+    await call(members.learner, 'patch', '/notifications/read-all').expect(200);
+    expect(
+      (
+        await call(members.learner, 'get', '/notifications?unread=true').expect(
+          200,
+        )
+      ).body.unread,
+    ).toBe(0);
+    await call(members.learner, 'post', '/notifications/system')
+      .send({ title: 'Denied announcement', message: 'Not permitted.' })
+      .expect(403);
+    await db.courseEntitlement.updateMany({
+      where: { enrollment: { course_id: course.id, user_id: userIds.learner } },
+      data: { state: 'REVOKED' },
+    });
+    const revoked = await call(members.learner, 'get', '/notifications').expect(
+      200,
+    );
+    expect(
+      revoked.body.items.some(
+        (n: { course_id: string }) => n.course_id === course.id,
+      ),
+    ).toBe(false);
+    await call(
+      members.learner,
+      'get',
+      '/assessments/attachments/' + file.body.id,
+    ).expect(403);
+    await call(members.learner, 'get', '/assessments/' + a.id).expect(403);
   });
 });
