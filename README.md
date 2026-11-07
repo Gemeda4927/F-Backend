@@ -295,6 +295,8 @@ Course thumbnails are stored in PostgreSQL, limited to 2 MB, and accepted as PNG
 
 ## Environment and deployment
 
+On Render, use `npm ci && npm run build` as the build command and `npm start` as the start command. `npm start` runs the compiled `dist/main.js` directly; it does not invoke the Nest CLI or compile TypeScript on the running instance. Use `npm run start:dev` for local development. Apply database migrations with `npm run db:deploy` before starting a release that changes the schema.
+
 Copy `.env.example` to `.env` without overwriting an existing file. Configure DATABASE_URL, DIRECT_URL if required, FRONTEND_URL, CORS_ORIGINS, PORT, independent JWT secrets, cookie settings, and any Chapa and SMTP settings used by the deployment. Never commit credentials. Apply reviewed migrations with `npm run db:deploy`, generate the client with `npm run prisma:generate`, and run `npm run build` followed by `npm run start:prod`. The Swagger UI is available at `/api/docs` when the server is running.
 
 ## Troubleshooting
