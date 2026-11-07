@@ -60,7 +60,7 @@ export class PaymentsService {
         data: { auth_version: { increment: 1 } },
       });
       const course = await tx.course.findFirst({
-        where: { id: dto.course_id, published: true, archived_at: null },
+        where: { id: dto.course_id, published: true, archived_at: null, visibility: 'PUBLIC' },
       });
       if (!course || course.price_minor <= 0)
         throw new ConflictException('Select a published paid course');

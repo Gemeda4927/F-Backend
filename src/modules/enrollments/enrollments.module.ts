@@ -55,7 +55,7 @@ class EnrollmentsController {
       throw new ForbiddenException('Student account required');
     return this.db.atomic(async (tx) => {
       const course = await tx.course.findUnique({ where: { id } });
-      if (!course?.published || course.archived_at || course.price_minor !== 0)
+      if (!course?.published || course.archived_at || course.visibility !== 'PUBLIC' || course.price_minor !== 0)
         throw new ForbiddenException('This course requires verified payment');
       const existing = await tx.enrollment.findUnique({
         where: { user_id_course_id: { user_id: u.id, course_id: id } },

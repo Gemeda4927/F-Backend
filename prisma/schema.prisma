@@ -28,6 +28,12 @@ enum EntitlementState {
   REVOKED
 }
 
+enum CourseVisibility {
+  PUBLIC
+  PRIVATE
+  UNLISTED
+}
+
 model User {
   id             String               @id @default(uuid()) @db.Uuid
   email          String               @unique
@@ -52,6 +58,10 @@ model User {
   auditLogs      AuditLog[]
   refunds        Refund[]
   assessmentSubmissions AssessmentSubmission[]
+  contributions Contribution[] @relation("ContributionAuthor")
+  verifiedContributions Contribution[] @relation("ContributionVerifier")
+  contributionVotes ContributionVote[]
+  creditEvents ContributionCreditEvent[]
 
   @@index([role_id])
   @@map("users")
@@ -136,6 +146,7 @@ model Course {
   price_minor   Int
   currency      String       @default("ETB")
   published     Boolean      @default(false)
+  visibility    CourseVisibility @default(PRIVATE)
   archived_at   DateTime?    @db.Timestamptz(6)
   created_at    DateTime     @default(now()) @db.Timestamptz(6)
   updated_at    DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
@@ -144,10 +155,74 @@ model Course {
   enrollments   Enrollment[]
   payments      Payment[]
   assessments   Assessment[]
+  thumbnail     CourseThumbnail?
+  contributions Contribution[]
 
   @@index([instructor_id])
   @@index([published, created_at])
   @@map("courses")
+}
+
+model Contribution {
+  id          String @id @default(uuid()) @db.Uuid
+  course_id   String @db.Uuid
+  author_id   String @db.Uuid
+  kind        String
+  content     String
+  status      String @default("PENDING")
+  verifier_id String? @db.Uuid
+  verified_at DateTime? @db.Timestamptz(6)
+  revoked_at  DateTime? @db.Timestamptz(6)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  course      Course @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  author      User @relation("ContributionAuthor", fields: [author_id], references: [id], onDelete: Restrict)
+  verifier    User? @relation("ContributionVerifier", fields: [verifier_id], references: [id], onDelete: Restrict)
+  votes       ContributionVote[]
+  credit_events ContributionCreditEvent[]
+  @@index([course_id, created_at])
+  @@map("contributions")
+}
+
+model ContributionVote {
+  contribution_id String @db.Uuid
+  user_id String @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  contribution Contribution @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
+  user User @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  @@id([contribution_id, user_id])
+  @@map("contribution_votes")
+}
+
+model ContributionCreditEvent {
+  id String @id @default(uuid()) @db.Uuid
+  contribution_id String @db.Uuid
+  user_id String @db.Uuid
+  event String
+  amount Int
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  contribution Contribution @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
+  user User @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  @@unique([contribution_id, event])
+  @@index([user_id, created_at])
+  @@map("contribution_credit_events")
+}
+
+model ContributionCreditConfig {
+  id String @id @default("default")
+  answer Int @default(10)
+  correction Int @default(5)
+  resource Int @default(3)
+  @@map("contribution_credit_config")
+}
+
+model CourseThumbnail {
+  course_id  String   @id @db.Uuid
+  content    Bytes
+  mime_type  String
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  course     Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+
+  @@map("course_thumbnails")
 }
 
 model Assessment {

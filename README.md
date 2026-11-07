@@ -287,6 +287,12 @@ Set a private `SEED_ACCOUNT_PASSWORD` in `.env`, then run `npm run db:seed:accou
 
 Instructors create written exams and assignments with one or more questions. Enrolled students can submit once; the course owner reviews the response and records an overall score and feedback. Edits are blocked once submissions exist. Archived courses are removed from the catalog and new enrollment paths, while existing enrolled students retain access. The API uses owner and course-access checks; the interface does not replace authorization.
 
+## Course visibility
+
+Visibility is independent of publication and archive state. `PUBLIC` courses appear in discovery only when published and not archived. `PRIVATE` and `UNLISTED` courses are excluded from public metadata, catalog, indexing and preview endpoints; an authenticated user with an existing active entitlement can access permitted material through the learning endpoint. Free self-enrollment and checkout are limited to public courses. Owners and administrators can manage course visibility; administrators can grant access explicitly. Existing courses become `PRIVATE` when the visibility migration is applied. Review each course and explicitly select `PUBLIC` before republishing it to discovery; no existing course is made public by migration. Deploy the migration and backend before the frontend, then invalidate any external CDN caches of earlier public course responses. No database reset is required.
+
+Course thumbnails are stored in PostgreSQL, limited to 2 MB, and accepted as PNG, JPEG, or WebP only after MIME and signature checks. Owners or administrators can replace or remove them. The public image endpoint checks publication, archive and visibility on every request; the authenticated endpoint checks course access. Both use `no-store` so changing visibility does not leave an application-managed image cache exposed.
+
 ## Environment and deployment
 
 Copy `.env.example` to `.env` without overwriting an existing file. Configure DATABASE_URL, DIRECT_URL if required, FRONTEND_URL, CORS_ORIGINS, PORT, independent JWT secrets, cookie settings, and any Chapa and SMTP settings used by the deployment. Never commit credentials. Apply reviewed migrations with `npm run db:deploy`, generate the client with `npm run prisma:generate`, and run `npm run build` followed by `npm run start:prod`. The Swagger UI is available at `/api/docs` when the server is running.

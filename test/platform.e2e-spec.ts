@@ -105,6 +105,12 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(host) && process.env.TEST_DATABASE_ALLOW_REMOTE !== 'true')
       throw Error('Refusing to clear a non-local test database without TEST_DATABASE_ALLOW_REMOTE=true');
     await db.$transaction([
+      db.contributionCreditEvent.deleteMany(),
+      db.contributionVote.deleteMany(),
+      db.contribution.deleteMany(),
+      db.contributionCreditConfig.deleteMany(),
+      db.assessmentSubmission.deleteMany(),
+      db.assessment.deleteMany(),
       db.refund.deleteMany(),
       db.auditLog.deleteMany(),
       db.learningProgress.deleteMany(),
@@ -256,6 +262,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         price_minor: 12500,
         currency: 'ETB',
         published: true,
+        visibility: 'PUBLIC',
       })
       .expect(201);
     courseId = r.body.id;
@@ -297,6 +304,42 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         content: 'No',
       })
       .expect(403);
+  });
+  it('exposes only explicitly public published courses in discovery', async () => {
+    const make = (title: string, visibility: 'PRIVATE' | 'UNLISTED' | 'PUBLIC', published = true, archived_at: Date | null = null) => db.course.create({ data: { title, description: 'Visibility test course description', instructor_id: ids.INSTRUCTOR, price_minor: 0, published, visibility, archived_at, lessons: { create: { title: 'Restricted preview', position: 0, kind: 'TEXT', preview: true, content: 'private material' } } }, include: { lessons: true } });
+    const privateCourse = await make('Private course', 'PRIVATE');
+    const unlisted = await make('Unlisted course', 'UNLISTED');
+    const draft = await make('Draft course', 'PUBLIC', false);
+    const archived = await make('Archived course', 'PUBLIC', true, new Date());
+    const catalog = await request(app.getHttpServer()).get('/api/v1/courses').expect(200);
+    const index = await request(app.getHttpServer()).get('/api/v1/courses/indexable').expect(200);
+    for (const course of [privateCourse, unlisted, draft, archived]) {
+      expect(catalog.body.some((item: { id: string }) => item.id === course.id)).toBe(false);
+      expect(index.body.some((item: { id: string }) => item.id === course.id)).toBe(false);
+      await request(app.getHttpServer()).get('/api/v1/courses/' + course.id).expect(404);
+      await request(app.getHttpServer()).get('/api/v1/lessons/' + course.lessons[0].id + '/preview').expect(403);
+      await call(agents.STUDENT, 'get', '/courses/' + course.id + '/learning').expect(403);
+      await call(agents.STUDENT, 'get', '/assessments/course/' + course.id).expect(403);
+      await call(agents.STUDENT, 'post', '/enrollments/' + course.id + '/free').expect(403);
+    }
+    expect(catalog.body.some((item: { id: string }) => item.id === courseId)).toBe(true);
+    expect(index.body.some((item: { id: string }) => item.id === courseId)).toBe(true);
+    await request(app.getHttpServer()).get('/api/v1/courses/' + courseId).expect(200);
+    const thumbnailPath = '/courses/manage/' + privateCourse.id + '/thumbnail';
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=', 'base64');
+    await call(agents.STUDENT, 'post', thumbnailPath).attach('file', png, { filename: 'image.png', contentType: 'image/png' }).expect(403);
+    await call(agents.INSTRUCTOR, 'post', thumbnailPath).attach('file', Buffer.from('not an image'), { filename: 'bad.png', contentType: 'image/png' }).expect(400);
+    await call(agents.INSTRUCTOR, 'post', thumbnailPath).attach('file', png, { filename: 'image.png', contentType: 'image/png' }).expect(201);
+    await call(agents.INSTRUCTOR, 'post', thumbnailPath).attach('file', png, { filename: 'replacement.png', contentType: 'image/png' }).expect(201);
+    await request(app.getHttpServer()).get('/api/v1/courses/' + privateCourse.id + '/thumbnail').expect(404);
+    await call(agents.STUDENT, 'get', thumbnailPath).expect(404);
+    await call(agents.INSTRUCTOR, 'get', thumbnailPath).expect(200).expect('Content-Type', /image\/png/).expect('Cache-Control', /no-store/);
+    await db.course.update({ where: { id: privateCourse.id }, data: { visibility: 'PUBLIC' } });
+    await request(app.getHttpServer()).get('/api/v1/courses/' + privateCourse.id + '/thumbnail').expect(200).expect('Cache-Control', /no-store/);
+    await db.course.update({ where: { id: privateCourse.id }, data: { visibility: 'PRIVATE' } });
+    await request(app.getHttpServer()).get('/api/v1/courses/' + privateCourse.id + '/thumbnail').expect(404);
+    await agents.INSTRUCTOR.delete('/api/v1' + thumbnailPath).set('Origin', origin).expect(200);
+    await call(agents.INSTRUCTOR, 'get', thumbnailPath).expect(404);
   });
   it('blocks unpaid lesson content and private asset access', async () => {
     await call(agents.STUDENT, 'get', '/lessons/' + lessonId).expect(403);
@@ -392,6 +435,36 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     ).toHaveLength(1);
   });
 
+  it('awards and reverses contribution credits once and prevents self or duplicate upvotes', async () => {
+    const voterId = randomUUID();
+    await db.user.create({ data: { id: voterId, email: 'voter@freshman.test', name: 'Voter', role: 'STUDENT', role_id: 'STUDENT', password_hash: await bcrypt.hash(password, 4) } });
+    await db.enrollment.create({ data: { user_id: voterId, course_id: courseId, entitlement: { create: {} } } });
+    const voter = request.agent(app.getHttpServer());
+    await call(voter, 'post', '/auth/login').send({ email: 'voter@freshman.test', password }).expect(200);
+    const item = await call(agents.STUDENT, 'post', '/contributions/course/' + courseId).send({ kind: 'ANSWER', content: 'A verified answer.' }).expect(201);
+    const id = item.body.id;
+    await call(agents.STUDENT, 'post', '/contributions/' + id + '/verify').expect(403);
+    const other = request.agent(app.getHttpServer());
+    await call(other, 'post', '/auth/login').send({ email: 'other@freshman.test', password }).expect(200);
+    await call(other, 'post', '/contributions/' + id + '/verify').expect(403);
+    const attempts = await Promise.all([call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/verify'), call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/verify')]);
+    expect(attempts.map(r => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
+    expect((await call(agents.STUDENT, 'get', '/contributions/me/credits').expect(200)).body.total).toBe(10);
+    await call(agents.STUDENT, 'post', '/contributions/' + id + '/upvote').expect(403);
+    await call(voter, 'post', '/contributions/' + id + '/upvote').expect(201);
+    await call(voter, 'post', '/contributions/' + id + '/upvote').expect(409);
+    expect((await call(voter, 'get', '/contributions/me/credits').expect(200)).body.total).toBe(0);
+    await call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/revoke').send({ reason: 'Answer is no longer valid' }).expect(201);
+    await call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/revoke').send({ reason: 'Answer is no longer valid' }).expect(409);
+    expect((await call(agents.STUDENT, 'get', '/contributions/me/credits').expect(200)).body.total).toBe(0);
+    expect(await db.contributionCreditEvent.count({ where: { contribution_id: id } })).toBe(2);
+    expect(await db.auditLog.count({ where: { resource_id: id, action: { in: ['CONTRIBUTION_VERIFIED', 'CONTRIBUTION_REVOKED'] } } })).toBe(2);
+    await call(agents.ADMIN, 'patch', '/contributions/config').send({ answer: 10, correction: 8, resource: 3 }).expect(403);
+    await call(agents.SUPER_ADMIN, 'patch', '/contributions/config').send({ answer: 10, correction: 8, resource: 3 }).expect(200);
+    const correction = await call(agents.STUDENT, 'post', '/contributions/course/' + courseId).send({ kind: 'CORRECTION', content: 'An approved correction.' }).expect(201);
+    expect((await call(agents.INSTRUCTOR, 'post', '/contributions/' + correction.body.id + '/verify').expect(201)).body.credit).toBe(8);
+    await call(agents.SUPER_ADMIN, 'patch', '/contributions/config').send({ answer: 10, correction: 5, resource: 3 }).expect(200);
+  });
   it('hides quiz answers and grades submissions on the backend', async () => {
     const result = await call(
       agents.INSTRUCTOR,
@@ -556,6 +629,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         price_minor: 12500,
         currency: 'ETB',
         published: true,
+        visibility: 'PUBLIC',
       })
       .expect(201);
     const payment = await call(agents.STUDENT, 'post', '/payments')
@@ -677,12 +751,16 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       expect(await db.studentDevice.count({ where: { user_id: studentId, revoked_at: null } })).toBe(0);
     });
     it('grants and revokes explicit access without inventing or changing payments', async () => {
+      const student = request.agent(app.getHttpServer());
       const course = await db.course.create({ data: { title: 'Administrative access course', description: 'Test explicit entitlement workflow', instructor_id: ids.INSTRUCTOR, price_minor: 99900, published: true } });
       managedCourse = course.id;
       const payments = await db.payment.count({ where: { user_id: studentId } });
       const draft = await db.course.create({ data: { title: 'Unpublished course', description: 'Not yet available for learning', instructor_id: ids.INSTRUCTOR, price_minor: 0, published: false } });
       await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/access').send({ course_id: draft.id, operation: 'GRANT', reason: 'Approved administrative access grant' }).expect(409);
       await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/access').send({ course_id: managedCourse, operation: 'GRANT', reason: 'Approved scholarship access grant' }).expect(201);
+      await call(student, 'post', '/auth/login').send({ email: 'managed@freshman.test', password }).expect(200);
+      await call(student, 'get', '/courses/' + managedCourse + '/learning').expect(200);
+      await call(student, 'get', '/assessments/course/' + managedCourse).expect(200);
       const records = await call(agents.SUPER_ADMIN, 'get', '/admin/students/' + studentId + '/courses').expect(200);
       expect(records.body.items[0].access).toBe(true);
       expect(records.body.items[0].payment_id).toBeNull();

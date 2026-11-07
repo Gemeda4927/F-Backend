@@ -16,6 +16,7 @@ import { PaymentsModule } from './modules/payments/payments.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { StudentsModule } from './modules/students/students.module.js';
 import { AssessmentsModule } from './modules/assessments/assessments.module.js';
+import { ContributionsModule } from './modules/contributions/contributions.module.js';
 @Module({
   imports: [
     PrismaModule,
@@ -32,6 +33,7 @@ import { AssessmentsModule } from './modules/assessments/assessments.module.js';
     DashboardModule,
     StudentsModule,
     AssessmentsModule,
+    ContributionsModule,
   ],
   providers: [
     ThrottlerGuard,
