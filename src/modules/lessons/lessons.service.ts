@@ -72,6 +72,11 @@ export class LessonsService {
         'Provide valid quiz questions and answer indices',
       );
     const { quiz, ...rest } = dto;
+    if (
+      dto.chapter !== undefined &&
+      (typeof dto.chapter !== 'string' || !dto.chapter.trim())
+    )
+      throw new BadRequestException('Enter a chapter name');
     const data = {
       ...rest,
       quiz:

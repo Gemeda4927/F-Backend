@@ -225,6 +225,12 @@ try {
           throw new Error('Refusing to change a lesson with learner progress');
         const data = {
           title: lesson.title,
+          chapter: [
+            'Foundations of critical thinking',
+            'Evidence and credibility',
+            'Bias and causal reasoning',
+            'Reasoned decisions',
+          ][Math.floor(position / 2)],
           position,
           kind: lesson.kind ?? 'TEXT',
           preview: lesson.preview ?? false,

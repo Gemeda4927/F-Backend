@@ -25,6 +25,7 @@ export class QuestionDto {
   @IsInt() @Min(0) @Max(5) correctIndex!: number;
 }
 export class LessonDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(120) chapter?: string;
   @IsOptional() @IsBoolean() practice?: boolean;
   @IsString() @MinLength(2) @MaxLength(160) title!: string;
   @IsInt() @Min(0) @Max(10000) position!: number;

@@ -314,3 +314,7 @@ Copy `.env.example` to `.env` without overwriting an existing file. Configure DA
 ## Troubleshooting
 
 For migration connection failures, verify PostgreSQL availability and DIRECT_URL; do not reset a populated database. For browser authentication failures, check allowed origins, cookie security and same-site settings, and time synchronization. A payment redirect is not proof of payment: the server verifies provider results before granting an entitlement. Run `npm test`, `npm run test:e2e`, `npm run typecheck`, and `npm run lint` as appropriate.
+
+## Chapter organization
+
+Course topics keep their existing IDs, content, access checks and progress records. The optional authoring field `chapter` groups related topics and quizzes; legacy topics default to `Getting started`. Public outlines, protected learning details, authoring lists and previews expose the chapter label without exposing protected content or quiz answer keys. Chapters are ordered by their first topic position. Apply additive migration `20261107170000_course_chapters` before deploying the updated backend/frontend.

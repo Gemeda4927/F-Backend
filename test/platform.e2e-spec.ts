@@ -1504,6 +1504,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     )
       .send({
         title: 'Reasoning practice',
+        chapter: 'Evidence and reasoning',
         position: 0,
         kind: 'QUIZ',
         practice: true,
@@ -1525,6 +1526,12 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       '/lessons/' + quiz.body.id,
     ).expect(200);
     expect(safeQuiz.body.practice).toBe(true);
+    expect(safeQuiz.body.chapter).toBe('Evidence and reasoning');
+    const outline = await request(app.getHttpServer())
+      .get('/api/v1/courses/' + course.id)
+      .expect(200);
+    expect(outline.body.lessons[0].chapter).toBe('Evidence and reasoning');
+    expect(outline.body.lessons[0]).not.toHaveProperty('quiz');
     expect(safeQuiz.body.quiz[0]).not.toHaveProperty('correctIndex');
     expect(safeQuiz.body.quiz[0]).not.toHaveProperty('explanation');
     await call(members.author, 'post', '/lessons/' + quiz.body.id + '/quiz')

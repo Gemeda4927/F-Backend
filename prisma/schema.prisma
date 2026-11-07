@@ -277,6 +277,7 @@ model Lesson {
   id           String             @id @default(uuid()) @db.Uuid
   course_id    String             @db.Uuid
   title        String
+  chapter      String             @default("Getting started")
   position     Int
   kind         String
   preview      Boolean            @default(false)

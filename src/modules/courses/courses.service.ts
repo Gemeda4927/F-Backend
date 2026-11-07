@@ -55,6 +55,7 @@ export class CoursesService {
           select: {
             id: true,
             title: true,
+            chapter: true,
             position: true,
             kind: true,
             practice: true,
@@ -83,6 +84,7 @@ export class CoursesService {
           select: {
             id: true,
             title: true,
+            chapter: true,
             position: true,
             kind: true,
             practice: true,
@@ -186,6 +188,7 @@ export class CoursesService {
           select: {
             id: true,
             title: true,
+            chapter: true,
             position: true,
             kind: true,
             practice: true,

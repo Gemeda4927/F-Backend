@@ -54,6 +54,7 @@ class LessonsController {
       select: {
         id: true,
         title: true,
+        chapter: true,
         position: true,
         kind: true,
         preview: true,
