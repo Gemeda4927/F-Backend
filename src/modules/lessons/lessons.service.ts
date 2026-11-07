@@ -18,11 +18,20 @@ export class LessonsService {
   async authorized(user: CurrentUser | undefined, id: string) {
     const lesson = await this.db.lesson.findUnique({
       where: { id },
-      include: { course: { select: { published: true, archived_at: true, visibility: true } } },
+      include: {
+        course: {
+          select: { published: true, archived_at: true, visibility: true },
+        },
+      },
     });
     if (!lesson) throw new NotFoundException('Lesson not found');
     if (
-      !(lesson.preview && lesson.course.published && !lesson.course.archived_at && lesson.course.visibility === 'PUBLIC') &&
+      !(
+        lesson.preview &&
+        lesson.course.published &&
+        !lesson.course.archived_at &&
+        lesson.course.visibility === 'PUBLIC'
+      ) &&
       (!user || !(await this.courses.canAccess(user, lesson.course_id)))
     )
       throw new ForbiddenException(

@@ -16,5 +16,6 @@ export class CourseDto {
   @IsInt() @Min(0) @Max(100000000) price_minor!: number;
   @IsIn(['ETB', 'USD']) currency!: string;
   @IsBoolean() published!: boolean;
-  @IsOptional() @IsIn(['PUBLIC', 'PRIVATE', 'UNLISTED']) visibility?: 'PUBLIC' | 'PRIVATE' | 'UNLISTED';
+  @IsOptional() @IsIn(['PUBLIC', 'PRIVATE', 'UNLISTED']) visibility?:
+    'PUBLIC' | 'PRIVATE' | 'UNLISTED';
 }

@@ -60,7 +60,12 @@ export class PaymentsService {
         data: { auth_version: { increment: 1 } },
       });
       const course = await tx.course.findFirst({
-        where: { id: dto.course_id, published: true, archived_at: null, visibility: 'PUBLIC' },
+        where: {
+          id: dto.course_id,
+          published: true,
+          archived_at: null,
+          visibility: 'PUBLIC',
+        },
       });
       if (!course || course.price_minor <= 0)
         throw new ConflictException('Select a published paid course');
@@ -170,7 +175,10 @@ export class PaymentsService {
   async verify(reference: string) {
     const payment = await this.db.payment.findUnique({
       where: { tx_ref: reference },
-      include: { user: { select: { email: true } }, course: { select: { title: true } } },
+      include: {
+        user: { select: { email: true } },
+        course: { select: { title: true } },
+      },
     });
     if (!payment) throw new NotFoundException('Payment not found');
     if (['REVOKED', 'REFUNDED'].includes(payment.status))
@@ -209,7 +217,12 @@ export class PaymentsService {
           data: { status: 'SUCCEEDED', provider_ref: providerRef },
         });
         const previousEnrollment = await tx.enrollment.findUnique({
-          where: { user_id_course_id: { user_id: current.user_id, course_id: current.course_id } },
+          where: {
+            user_id_course_id: {
+              user_id: current.user_id,
+              course_id: current.course_id,
+            },
+          },
           select: { id: true },
         });
         const enrollment = await tx.enrollment.upsert({
@@ -234,8 +247,29 @@ export class PaymentsService {
             state: enrollment.status === 'ACTIVE' ? 'ACTIVE' : 'REVOKED',
           },
         });
-        await audit(tx, { target: current.user_id, action: 'PAYMENT_VERIFIED', description: `Course payment verified by Chapa: ${payment.course.title}.`, resourceType: 'PAYMENT', resourceId: current.id, oldValues: { status: current.status }, newValues: { status: 'SUCCEEDED', reference: current.tx_ref, course_id: current.course_id, amount_minor: current.amount_minor, currency: current.currency } });
-        if (!previousEnrollment) await audit(tx, { target: current.user_id, action: 'COURSE_ENROLLED', description: 'Student enrolled after verified payment.', resourceType: 'COURSE', resourceId: current.course_id });
+        await audit(tx, {
+          target: current.user_id,
+          action: 'PAYMENT_VERIFIED',
+          description: `Course payment verified by Chapa: ${payment.course.title}.`,
+          resourceType: 'PAYMENT',
+          resourceId: current.id,
+          oldValues: { status: current.status },
+          newValues: {
+            status: 'SUCCEEDED',
+            reference: current.tx_ref,
+            course_id: current.course_id,
+            amount_minor: current.amount_minor,
+            currency: current.currency,
+          },
+        });
+        if (!previousEnrollment)
+          await audit(tx, {
+            target: current.user_id,
+            action: 'COURSE_ENROLLED',
+            description: 'Student enrolled after verified payment.',
+            resourceType: 'COURSE',
+            resourceId: current.course_id,
+          });
       } else if (status === 'refunded') {
         await tx.payment.update({
           where: { id: current.id },
@@ -306,7 +340,17 @@ export class PaymentsService {
       if (!payment) throw new NotFoundException();
       await tx.payment.update({ where: { id }, data: { status: 'REVOKED' } });
       await this.revokeEntitlements(tx, id);
-      await audit(tx, { actor, target: payment.user_id, action: 'ACCESS_REVOKED', description: 'Course access associated with the payment was revoked.', resourceType: 'PAYMENT', resourceId: id, reason, oldValues: { payment_status: payment.status }, newValues: { payment_status: 'REVOKED' } });
+      await audit(tx, {
+        actor,
+        target: payment.user_id,
+        action: 'ACCESS_REVOKED',
+        description: 'Course access associated with the payment was revoked.',
+        resourceType: 'PAYMENT',
+        resourceId: id,
+        reason,
+        oldValues: { payment_status: payment.status },
+        newValues: { payment_status: 'REVOKED' },
+      });
       return {
         message: 'Access revoked. This does not issue a monetary refund.',
       };
@@ -335,7 +379,16 @@ export class PaymentsService {
       });
       await tx.payment.update({ where: { id }, data: { status: 'REVOKED' } });
       await this.revokeEntitlements(tx, id);
-      await audit(tx, { actor, target: payment.user_id, action: 'REFUND_REQUESTED', description: 'A payment refund was requested and course access was revoked.', resourceType: 'PAYMENT', resourceId: id, reason });
+      await audit(tx, {
+        actor,
+        target: payment.user_id,
+        action: 'REFUND_REQUESTED',
+        description:
+          'A payment refund was requested and course access was revoked.',
+        resourceType: 'PAYMENT',
+        resourceId: id,
+        reason,
+      });
       return { refund, payment, isNew: true };
     });
     if (!claim.isNew)

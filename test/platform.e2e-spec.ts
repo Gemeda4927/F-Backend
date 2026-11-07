@@ -102,8 +102,13 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         'Integration tests require the isolated freshman_test_platform database',
       );
     const host = new URL(process.env.TEST_DATABASE_URL!).hostname;
-    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host) && process.env.TEST_DATABASE_ALLOW_REMOTE !== 'true')
-      throw Error('Refusing to clear a non-local test database without TEST_DATABASE_ALLOW_REMOTE=true');
+    if (
+      !['127.0.0.1', 'localhost', '[::1]'].includes(host) &&
+      process.env.TEST_DATABASE_ALLOW_REMOTE !== 'true'
+    )
+      throw Error(
+        'Refusing to clear a non-local test database without TEST_DATABASE_ALLOW_REMOTE=true',
+      );
     await db.$transaction([
       db.contributionCreditEvent.deleteMany(),
       db.contributionVote.deleteMany(),
@@ -306,39 +311,130 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       .expect(403);
   });
   it('exposes only explicitly public published courses in discovery', async () => {
-    const make = (title: string, visibility: 'PRIVATE' | 'UNLISTED' | 'PUBLIC', published = true, archived_at: Date | null = null) => db.course.create({ data: { title, description: 'Visibility test course description', instructor_id: ids.INSTRUCTOR, price_minor: 0, published, visibility, archived_at, lessons: { create: { title: 'Restricted preview', position: 0, kind: 'TEXT', preview: true, content: 'private material' } } }, include: { lessons: true } });
+    const make = (
+      title: string,
+      visibility: 'PRIVATE' | 'UNLISTED' | 'PUBLIC',
+      published = true,
+      archived_at: Date | null = null,
+    ) =>
+      db.course.create({
+        data: {
+          title,
+          description: 'Visibility test course description',
+          instructor_id: ids.INSTRUCTOR,
+          price_minor: 0,
+          published,
+          visibility,
+          archived_at,
+          lessons: {
+            create: {
+              title: 'Restricted preview',
+              position: 0,
+              kind: 'TEXT',
+              preview: true,
+              content: 'private material',
+            },
+          },
+        },
+        include: { lessons: true },
+      });
     const privateCourse = await make('Private course', 'PRIVATE');
     const unlisted = await make('Unlisted course', 'UNLISTED');
     const draft = await make('Draft course', 'PUBLIC', false);
     const archived = await make('Archived course', 'PUBLIC', true, new Date());
-    const catalog = await request(app.getHttpServer()).get('/api/v1/courses').expect(200);
-    const index = await request(app.getHttpServer()).get('/api/v1/courses/indexable').expect(200);
+    const catalog = await request(app.getHttpServer())
+      .get('/api/v1/courses')
+      .expect(200);
+    const index = await request(app.getHttpServer())
+      .get('/api/v1/courses/indexable')
+      .expect(200);
     for (const course of [privateCourse, unlisted, draft, archived]) {
-      expect(catalog.body.some((item: { id: string }) => item.id === course.id)).toBe(false);
-      expect(index.body.some((item: { id: string }) => item.id === course.id)).toBe(false);
-      await request(app.getHttpServer()).get('/api/v1/courses/' + course.id).expect(404);
-      await request(app.getHttpServer()).get('/api/v1/lessons/' + course.lessons[0].id + '/preview').expect(403);
-      await call(agents.STUDENT, 'get', '/courses/' + course.id + '/learning').expect(403);
-      await call(agents.STUDENT, 'get', '/assessments/course/' + course.id).expect(403);
-      await call(agents.STUDENT, 'post', '/enrollments/' + course.id + '/free').expect(403);
+      expect(
+        catalog.body.some((item: { id: string }) => item.id === course.id),
+      ).toBe(false);
+      expect(
+        index.body.some((item: { id: string }) => item.id === course.id),
+      ).toBe(false);
+      await request(app.getHttpServer())
+        .get('/api/v1/courses/' + course.id)
+        .expect(404);
+      await request(app.getHttpServer())
+        .get('/api/v1/lessons/' + course.lessons[0].id + '/preview')
+        .expect(403);
+      await call(
+        agents.STUDENT,
+        'get',
+        '/courses/' + course.id + '/learning',
+      ).expect(403);
+      await call(
+        agents.STUDENT,
+        'get',
+        '/assessments/course/' + course.id,
+      ).expect(403);
+      await call(
+        agents.STUDENT,
+        'post',
+        '/enrollments/' + course.id + '/free',
+      ).expect(403);
     }
-    expect(catalog.body.some((item: { id: string }) => item.id === courseId)).toBe(true);
-    expect(index.body.some((item: { id: string }) => item.id === courseId)).toBe(true);
-    await request(app.getHttpServer()).get('/api/v1/courses/' + courseId).expect(200);
+    expect(
+      catalog.body.some((item: { id: string }) => item.id === courseId),
+    ).toBe(true);
+    expect(
+      index.body.some((item: { id: string }) => item.id === courseId),
+    ).toBe(true);
+    await request(app.getHttpServer())
+      .get('/api/v1/courses/' + courseId)
+      .expect(200);
     const thumbnailPath = '/courses/manage/' + privateCourse.id + '/thumbnail';
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=', 'base64');
-    await call(agents.STUDENT, 'post', thumbnailPath).attach('file', png, { filename: 'image.png', contentType: 'image/png' }).expect(403);
-    await call(agents.INSTRUCTOR, 'post', thumbnailPath).attach('file', Buffer.from('not an image'), { filename: 'bad.png', contentType: 'image/png' }).expect(400);
-    await call(agents.INSTRUCTOR, 'post', thumbnailPath).attach('file', png, { filename: 'image.png', contentType: 'image/png' }).expect(201);
-    await call(agents.INSTRUCTOR, 'post', thumbnailPath).attach('file', png, { filename: 'replacement.png', contentType: 'image/png' }).expect(201);
-    await request(app.getHttpServer()).get('/api/v1/courses/' + privateCourse.id + '/thumbnail').expect(404);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=',
+      'base64',
+    );
+    await call(agents.STUDENT, 'post', thumbnailPath)
+      .attach('file', png, { filename: 'image.png', contentType: 'image/png' })
+      .expect(403);
+    await call(agents.INSTRUCTOR, 'post', thumbnailPath)
+      .attach('file', Buffer.from('not an image'), {
+        filename: 'bad.png',
+        contentType: 'image/png',
+      })
+      .expect(400);
+    await call(agents.INSTRUCTOR, 'post', thumbnailPath)
+      .attach('file', png, { filename: 'image.png', contentType: 'image/png' })
+      .expect(201);
+    await call(agents.INSTRUCTOR, 'post', thumbnailPath)
+      .attach('file', png, {
+        filename: 'replacement.png',
+        contentType: 'image/png',
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .get('/api/v1/courses/' + privateCourse.id + '/thumbnail')
+      .expect(404);
     await call(agents.STUDENT, 'get', thumbnailPath).expect(404);
-    await call(agents.INSTRUCTOR, 'get', thumbnailPath).expect(200).expect('Content-Type', /image\/png/).expect('Cache-Control', /no-store/);
-    await db.course.update({ where: { id: privateCourse.id }, data: { visibility: 'PUBLIC' } });
-    await request(app.getHttpServer()).get('/api/v1/courses/' + privateCourse.id + '/thumbnail').expect(200).expect('Cache-Control', /no-store/);
-    await db.course.update({ where: { id: privateCourse.id }, data: { visibility: 'PRIVATE' } });
-    await request(app.getHttpServer()).get('/api/v1/courses/' + privateCourse.id + '/thumbnail').expect(404);
-    await agents.INSTRUCTOR.delete('/api/v1' + thumbnailPath).set('Origin', origin).expect(200);
+    await call(agents.INSTRUCTOR, 'get', thumbnailPath)
+      .expect(200)
+      .expect('Content-Type', /image\/png/)
+      .expect('Cache-Control', /no-store/);
+    await db.course.update({
+      where: { id: privateCourse.id },
+      data: { visibility: 'PUBLIC' },
+    });
+    await request(app.getHttpServer())
+      .get('/api/v1/courses/' + privateCourse.id + '/thumbnail')
+      .expect(200)
+      .expect('Cache-Control', /no-store/);
+    await db.course.update({
+      where: { id: privateCourse.id },
+      data: { visibility: 'PRIVATE' },
+    });
+    await request(app.getHttpServer())
+      .get('/api/v1/courses/' + privateCourse.id + '/thumbnail')
+      .expect(404);
+    await agents.INSTRUCTOR.delete('/api/v1' + thumbnailPath)
+      .set('Origin', origin)
+      .expect(200);
     await call(agents.INSTRUCTOR, 'get', thumbnailPath).expect(404);
   });
   it('blocks unpaid lesson content and private asset access', async () => {
@@ -399,8 +495,24 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     await request(app.getHttpServer())
       .get('/api/v1/payments/callback?tx_ref=' + paymentRef)
       .expect(200);
-    expect(await db.auditLog.count({ where: { target_id: ids.STUDENT, action: 'PAYMENT_VERIFIED', resource_id: paymentId } })).toBe(1);
-    expect(await db.auditLog.count({ where: { target_id: ids.STUDENT, action: 'COURSE_ENROLLED', resource_id: courseId } })).toBe(1);
+    expect(
+      await db.auditLog.count({
+        where: {
+          target_id: ids.STUDENT,
+          action: 'PAYMENT_VERIFIED',
+          resource_id: paymentId,
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await db.auditLog.count({
+        where: {
+          target_id: ids.STUDENT,
+          action: 'COURSE_ENROLLED',
+          resource_id: courseId,
+        },
+      }),
+    ).toBe(1);
     await request(app.getHttpServer())
       .get('/api/v1/payments/callback?tx_ref=' + paymentRef)
       .expect(200);
@@ -437,33 +549,121 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
 
   it('awards and reverses contribution credits once and prevents self or duplicate upvotes', async () => {
     const voterId = randomUUID();
-    await db.user.create({ data: { id: voterId, email: 'voter@freshman.test', name: 'Voter', role: 'STUDENT', role_id: 'STUDENT', password_hash: await bcrypt.hash(password, 4) } });
-    await db.enrollment.create({ data: { user_id: voterId, course_id: courseId, entitlement: { create: {} } } });
+    await db.user.create({
+      data: {
+        id: voterId,
+        email: 'voter@freshman.test',
+        name: 'Voter',
+        role: 'STUDENT',
+        role_id: 'STUDENT',
+        password_hash: await bcrypt.hash(password, 4),
+      },
+    });
+    await db.enrollment.create({
+      data: {
+        user_id: voterId,
+        course_id: courseId,
+        entitlement: { create: {} },
+      },
+    });
     const voter = request.agent(app.getHttpServer());
-    await call(voter, 'post', '/auth/login').send({ email: 'voter@freshman.test', password }).expect(200);
-    const item = await call(agents.STUDENT, 'post', '/contributions/course/' + courseId).send({ kind: 'ANSWER', content: 'A verified answer.' }).expect(201);
+    await call(voter, 'post', '/auth/login')
+      .send({ email: 'voter@freshman.test', password })
+      .expect(200);
+    const item = await call(
+      agents.STUDENT,
+      'post',
+      '/contributions/course/' + courseId,
+    )
+      .send({ kind: 'ANSWER', content: 'A verified answer.' })
+      .expect(201);
     const id = item.body.id;
-    await call(agents.STUDENT, 'post', '/contributions/' + id + '/verify').expect(403);
+    await call(
+      agents.STUDENT,
+      'post',
+      '/contributions/' + id + '/verify',
+    ).expect(403);
     const other = request.agent(app.getHttpServer());
-    await call(other, 'post', '/auth/login').send({ email: 'other@freshman.test', password }).expect(200);
+    await call(other, 'post', '/auth/login')
+      .send({ email: 'other@freshman.test', password })
+      .expect(200);
     await call(other, 'post', '/contributions/' + id + '/verify').expect(403);
-    const attempts = await Promise.all([call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/verify'), call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/verify')]);
-    expect(attempts.map(r => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
-    expect((await call(agents.STUDENT, 'get', '/contributions/me/credits').expect(200)).body.total).toBe(10);
-    await call(agents.STUDENT, 'post', '/contributions/' + id + '/upvote').expect(403);
+    const attempts = await Promise.all([
+      call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/verify'),
+      call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/verify'),
+    ]);
+    expect(attempts.map((r) => r.status).sort((a, b) => a - b)).toEqual([
+      201, 409,
+    ]);
+    expect(
+      (
+        await call(agents.STUDENT, 'get', '/contributions/me/credits').expect(
+          200,
+        )
+      ).body.total,
+    ).toBe(10);
+    await call(
+      agents.STUDENT,
+      'post',
+      '/contributions/' + id + '/upvote',
+    ).expect(403);
     await call(voter, 'post', '/contributions/' + id + '/upvote').expect(201);
     await call(voter, 'post', '/contributions/' + id + '/upvote').expect(409);
-    expect((await call(voter, 'get', '/contributions/me/credits').expect(200)).body.total).toBe(0);
-    await call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/revoke').send({ reason: 'Answer is no longer valid' }).expect(201);
-    await call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/revoke').send({ reason: 'Answer is no longer valid' }).expect(409);
-    expect((await call(agents.STUDENT, 'get', '/contributions/me/credits').expect(200)).body.total).toBe(0);
-    expect(await db.contributionCreditEvent.count({ where: { contribution_id: id } })).toBe(2);
-    expect(await db.auditLog.count({ where: { resource_id: id, action: { in: ['CONTRIBUTION_VERIFIED', 'CONTRIBUTION_REVOKED'] } } })).toBe(2);
-    await call(agents.ADMIN, 'patch', '/contributions/config').send({ answer: 10, correction: 8, resource: 3 }).expect(403);
-    await call(agents.SUPER_ADMIN, 'patch', '/contributions/config').send({ answer: 10, correction: 8, resource: 3 }).expect(200);
-    const correction = await call(agents.STUDENT, 'post', '/contributions/course/' + courseId).send({ kind: 'CORRECTION', content: 'An approved correction.' }).expect(201);
-    expect((await call(agents.INSTRUCTOR, 'post', '/contributions/' + correction.body.id + '/verify').expect(201)).body.credit).toBe(8);
-    await call(agents.SUPER_ADMIN, 'patch', '/contributions/config').send({ answer: 10, correction: 5, resource: 3 }).expect(200);
+    expect(
+      (await call(voter, 'get', '/contributions/me/credits').expect(200)).body
+        .total,
+    ).toBe(0);
+    await call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/revoke')
+      .send({ reason: 'Answer is no longer valid' })
+      .expect(201);
+    await call(agents.INSTRUCTOR, 'post', '/contributions/' + id + '/revoke')
+      .send({ reason: 'Answer is no longer valid' })
+      .expect(409);
+    expect(
+      (
+        await call(agents.STUDENT, 'get', '/contributions/me/credits').expect(
+          200,
+        )
+      ).body.total,
+    ).toBe(0);
+    expect(
+      await db.contributionCreditEvent.count({
+        where: { contribution_id: id },
+      }),
+    ).toBe(2);
+    expect(
+      await db.auditLog.count({
+        where: {
+          resource_id: id,
+          action: { in: ['CONTRIBUTION_VERIFIED', 'CONTRIBUTION_REVOKED'] },
+        },
+      }),
+    ).toBe(2);
+    await call(agents.ADMIN, 'patch', '/contributions/config')
+      .send({ answer: 10, correction: 8, resource: 3 })
+      .expect(403);
+    await call(agents.SUPER_ADMIN, 'patch', '/contributions/config')
+      .send({ answer: 10, correction: 8, resource: 3 })
+      .expect(200);
+    const correction = await call(
+      agents.STUDENT,
+      'post',
+      '/contributions/course/' + courseId,
+    )
+      .send({ kind: 'CORRECTION', content: 'An approved correction.' })
+      .expect(201);
+    expect(
+      (
+        await call(
+          agents.INSTRUCTOR,
+          'post',
+          '/contributions/' + correction.body.id + '/verify',
+        ).expect(201)
+      ).body.credit,
+    ).toBe(8);
+    await call(agents.SUPER_ADMIN, 'patch', '/contributions/config')
+      .send({ answer: 10, correction: 5, resource: 3 })
+      .expect(200);
   });
   it('hides quiz answers and grades submissions on the backend', async () => {
     const result = await call(
@@ -680,28 +880,47 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     expect(access.body.access).toBe(false);
   });
 
-  it('preserves users, purchases and revoked entitlements across repeated safe seeding',async()=>{
-    const snapshot=async()=>({
-      users:await db.user.findMany({orderBy:{id:'asc'}}),
-      payments:await db.payment.findMany({orderBy:{id:'asc'}}),
-      enrollments:await db.enrollment.findMany({orderBy:{id:'asc'}}),
-      entitlements:await db.courseEntitlement.findMany({orderBy:{id:'asc'}}),
-      devices:await db.studentDevice.findMany({orderBy:{id:'asc'}}),
+  it('preserves users, purchases and revoked entitlements across repeated safe seeding', async () => {
+    const snapshot = async () => ({
+      users: await db.user.findMany({ orderBy: { id: 'asc' } }),
+      payments: await db.payment.findMany({ orderBy: { id: 'asc' } }),
+      enrollments: await db.enrollment.findMany({ orderBy: { id: 'asc' } }),
+      entitlements: await db.courseEntitlement.findMany({
+        orderBy: { id: 'asc' },
+      }),
+      devices: await db.studentDevice.findMany({ orderBy: { id: 'asc' } }),
     });
-    const before=await snapshot();
-    await seedConfiguration(db);await seedConfiguration(db);
+    const before = await snapshot();
+    await seedConfiguration(db);
+    await seedConfiguration(db);
     expect(await snapshot()).toEqual(before);
   });
-  it('checks granular permissions from PostgreSQL rather than a hardcoded role grant',async()=>{
-    await db.rolePermission.delete({where:{role_id_permission_code:{role_id:'ADMIN',permission_code:'devices:reset'}}});
-    try{
-      await call(agents.ADMIN,'post','/devices/student/'+ids.STUDENT+'/reset').send({reason:'Denied after permission removal'}).expect(403);
-    }finally{
-      await db.rolePermission.create({data:{role_id:'ADMIN',permission_code:'devices:reset'}});
+  it('checks granular permissions from PostgreSQL rather than a hardcoded role grant', async () => {
+    await db.rolePermission.delete({
+      where: {
+        role_id_permission_code: {
+          role_id: 'ADMIN',
+          permission_code: 'devices:reset',
+        },
+      },
+    });
+    try {
+      await call(
+        agents.ADMIN,
+        'post',
+        '/devices/student/' + ids.STUDENT + '/reset',
+      )
+        .send({ reason: 'Denied after permission removal' })
+        .expect(403);
+    } finally {
+      await db.rolePermission.create({
+        data: { role_id: 'ADMIN', permission_code: 'devices:reset' },
+      });
     }
   });
   describe('Super Admin student administration', () => {
-    let studentId = '', managedCourse = '';
+    let studentId = '',
+      managedCourse = '';
     it('restricts dedicated student APIs to Super Admin permissions', async () => {
       for (const role of ['STUDENT', 'INSTRUCTOR', 'ADMIN']) {
         await call(agents[role], 'get', '/admin/students').expect(403);
@@ -710,22 +929,70 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       await call(agents.SUPER_ADMIN, 'get', '/admin/students').expect(200);
     });
     it('paginates and searches actual students without leaking credentials', async () => {
-      const user = await db.user.create({ data: { name: 'Managed Student', email: 'managed@freshman.test', role: 'STUDENT', role_id: 'STUDENT', password_hash: await bcrypt.hash(password, 4) } });
+      const user = await db.user.create({
+        data: {
+          name: 'Managed Student',
+          email: 'managed@freshman.test',
+          role: 'STUDENT',
+          role_id: 'STUDENT',
+          password_hash: await bcrypt.hash(password, 4),
+        },
+      });
       studentId = user.id;
-      const result = await call(agents.SUPER_ADMIN, 'get', '/admin/students?search=managed&pageSize=1&sort=name&direction=asc').expect(200);
+      const result = await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students?search=managed&pageSize=1&sort=name&direction=asc',
+      ).expect(200);
       expect(result.body.total).toBe(1);
       expect(result.body.items[0].id).toBe(studentId);
       expect(result.body.items[0].status).toBe('ACTIVE');
-      expect(JSON.stringify(result.body)).not.toMatch(/password_hash|token_hash|refresh_hash/);
-      await call(agents.SUPER_ADMIN, 'get', '/admin/students?pageSize=101').expect(400);
-      await call(agents.SUPER_ADMIN, 'get', '/admin/students?sort=password_hash').expect(400);
-      await call(agents.SUPER_ADMIN, 'get', '/admin/students/not-a-uuid').expect(400);
-      await call(agents.SUPER_ADMIN, 'get', '/admin/students/' + ids.INSTRUCTOR).expect(404);
+      expect(JSON.stringify(result.body)).not.toMatch(
+        /password_hash|token_hash|refresh_hash/,
+      );
+      await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students?pageSize=101',
+      ).expect(400);
+      await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students?sort=password_hash',
+      ).expect(400);
+      await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students/not-a-uuid',
+      ).expect(400);
+      await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students/' + ids.INSTRUCTOR,
+      ).expect(404);
     });
     it('validates profile updates and records safe chronological field changes', async () => {
-      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId).send({ name: 'Updated student', reason: 'Verified profile correction', actor_id: ids.ADMIN }).expect(400);
-      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId).send({ name: 'Updated student', phone: '+251 123 456', reason: 'Verified profile correction password=never-save' }).expect(200);
-      const history = await call(agents.SUPER_ADMIN, 'get', '/admin/students/' + studentId + '/audit-logs?action=PROFILE_UPDATED&pageSize=1').expect(200);
+      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId)
+        .send({
+          name: 'Updated student',
+          reason: 'Verified profile correction',
+          actor_id: ids.ADMIN,
+        })
+        .expect(400);
+      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId)
+        .send({
+          name: 'Updated student',
+          phone: '+251 123 456',
+          reason: 'Verified profile correction password=never-save',
+        })
+        .expect(200);
+      const history = await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students/' +
+          studentId +
+          '/audit-logs?action=PROFILE_UPDATED&pageSize=1',
+      ).expect(200);
       expect(history.body.total).toBe(1);
       expect(history.body.items[0].actor_id).toBe(ids.SUPER_ADMIN);
       expect(history.body.items[0].old_values.name).toBe('Managed Student');
@@ -736,61 +1003,229 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     });
     it('suspends, restores and invalidates existing student sessions', async () => {
       const student = request.agent(app.getHttpServer());
-      await call(student, 'post', '/auth/login').send({ email: 'managed@freshman.test', password }).expect(200);
-      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId + '/status').send({ status: 'SUSPENDED' }).expect(400);
-      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId + '/status').send({ status: 'SUSPENDED', reason: 'Confirmed account policy violation' }).expect(200);
+      await call(student, 'post', '/auth/login')
+        .send({ email: 'managed@freshman.test', password })
+        .expect(200);
+      await call(
+        agents.SUPER_ADMIN,
+        'patch',
+        '/admin/students/' + studentId + '/status',
+      )
+        .send({ status: 'SUSPENDED' })
+        .expect(400);
+      await call(
+        agents.SUPER_ADMIN,
+        'patch',
+        '/admin/students/' + studentId + '/status',
+      )
+        .send({
+          status: 'SUSPENDED',
+          reason: 'Confirmed account policy violation',
+        })
+        .expect(200);
       await call(student, 'get', '/auth/me').expect(401);
-      const filtered = await call(agents.SUPER_ADMIN, 'get', '/admin/students?status=SUSPENDED&search=managed').expect(200);
+      const filtered = await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students?status=SUSPENDED&search=managed',
+      ).expect(200);
       expect(filtered.body.total).toBe(1);
-      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId + '/status').send({ status: 'ACTIVE', reason: 'Account review completed successfully' }).expect(200);
-      await call(student, 'post', '/auth/login').send({ email: 'managed@freshman.test', password }).expect(200);
-      await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/sessions/revoke').send({ reason: 'Verified session security review' }).expect(201);
+      await call(
+        agents.SUPER_ADMIN,
+        'patch',
+        '/admin/students/' + studentId + '/status',
+      )
+        .send({
+          status: 'ACTIVE',
+          reason: 'Account review completed successfully',
+        })
+        .expect(200);
+      await call(student, 'post', '/auth/login')
+        .send({ email: 'managed@freshman.test', password })
+        .expect(200);
+      await call(
+        agents.SUPER_ADMIN,
+        'post',
+        '/admin/students/' + studentId + '/sessions/revoke',
+      )
+        .send({ reason: 'Verified session security review' })
+        .expect(201);
       await call(student, 'get', '/auth/me').expect(401);
-      expect(await db.studentDevice.count({ where: { user_id: studentId, revoked_at: null } })).toBe(1);
-      await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/devices/reset').send({ reason: 'Student replacing registered browser' }).expect(201);
-      expect(await db.studentDevice.count({ where: { user_id: studentId, revoked_at: null } })).toBe(0);
+      expect(
+        await db.studentDevice.count({
+          where: { user_id: studentId, revoked_at: null },
+        }),
+      ).toBe(1);
+      await call(
+        agents.SUPER_ADMIN,
+        'post',
+        '/admin/students/' + studentId + '/devices/reset',
+      )
+        .send({ reason: 'Student replacing registered browser' })
+        .expect(201);
+      expect(
+        await db.studentDevice.count({
+          where: { user_id: studentId, revoked_at: null },
+        }),
+      ).toBe(0);
     });
     it('grants and revokes explicit access without inventing or changing payments', async () => {
       const student = request.agent(app.getHttpServer());
-      const course = await db.course.create({ data: { title: 'Administrative access course', description: 'Test explicit entitlement workflow', instructor_id: ids.INSTRUCTOR, price_minor: 99900, published: true } });
+      const course = await db.course.create({
+        data: {
+          title: 'Administrative access course',
+          description: 'Test explicit entitlement workflow',
+          instructor_id: ids.INSTRUCTOR,
+          price_minor: 99900,
+          published: true,
+        },
+      });
       managedCourse = course.id;
-      const payments = await db.payment.count({ where: { user_id: studentId } });
-      const draft = await db.course.create({ data: { title: 'Unpublished course', description: 'Not yet available for learning', instructor_id: ids.INSTRUCTOR, price_minor: 0, published: false } });
-      await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/access').send({ course_id: draft.id, operation: 'GRANT', reason: 'Approved administrative access grant' }).expect(409);
-      await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/access').send({ course_id: managedCourse, operation: 'GRANT', reason: 'Approved scholarship access grant' }).expect(201);
-      await call(student, 'post', '/auth/login').send({ email: 'managed@freshman.test', password }).expect(200);
-      await call(student, 'get', '/courses/' + managedCourse + '/learning').expect(200);
-      await call(student, 'get', '/assessments/course/' + managedCourse).expect(200);
-      const records = await call(agents.SUPER_ADMIN, 'get', '/admin/students/' + studentId + '/courses').expect(200);
+      const payments = await db.payment.count({
+        where: { user_id: studentId },
+      });
+      const draft = await db.course.create({
+        data: {
+          title: 'Unpublished course',
+          description: 'Not yet available for learning',
+          instructor_id: ids.INSTRUCTOR,
+          price_minor: 0,
+          published: false,
+        },
+      });
+      await call(
+        agents.SUPER_ADMIN,
+        'post',
+        '/admin/students/' + studentId + '/access',
+      )
+        .send({
+          course_id: draft.id,
+          operation: 'GRANT',
+          reason: 'Approved administrative access grant',
+        })
+        .expect(409);
+      await call(
+        agents.SUPER_ADMIN,
+        'post',
+        '/admin/students/' + studentId + '/access',
+      )
+        .send({
+          course_id: managedCourse,
+          operation: 'GRANT',
+          reason: 'Approved scholarship access grant',
+        })
+        .expect(201);
+      await call(student, 'post', '/auth/login')
+        .send({ email: 'managed@freshman.test', password })
+        .expect(200);
+      await call(
+        student,
+        'get',
+        '/courses/' + managedCourse + '/learning',
+      ).expect(200);
+      await call(student, 'get', '/assessments/course/' + managedCourse).expect(
+        200,
+      );
+      const records = await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students/' + studentId + '/courses',
+      ).expect(200);
       expect(records.body.items[0].access).toBe(true);
       expect(records.body.items[0].payment_id).toBeNull();
-      expect(await db.payment.count({ where: { user_id: studentId } })).toBe(payments);
-      await call(agents.SUPER_ADMIN, 'post', '/admin/students/' + studentId + '/access').send({ course_id: managedCourse, operation: 'REVOKE', reason: 'Scholarship access period has ended' }).expect(201);
-      const revoked = await call(agents.SUPER_ADMIN, 'get', '/admin/students/' + studentId + '/progress').expect(200);
+      expect(await db.payment.count({ where: { user_id: studentId } })).toBe(
+        payments,
+      );
+      await call(
+        agents.SUPER_ADMIN,
+        'post',
+        '/admin/students/' + studentId + '/access',
+      )
+        .send({
+          course_id: managedCourse,
+          operation: 'REVOKE',
+          reason: 'Scholarship access period has ended',
+        })
+        .expect(201);
+      const revoked = await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/admin/students/' + studentId + '/progress',
+      ).expect(200);
       expect(revoked.body.items[0].access).toBe(false);
     });
     it('does not commit status when the corresponding audit insert fails', async () => {
       const service = app.get(StudentsService);
-      await expect(service.status({ id: randomUUID(), name: 'Invalid actor', email: 'invalid@freshman.test', role: 'SUPER_ADMIN', sessionId: randomUUID() }, studentId, { status: 'SUSPENDED', reason: 'Rollback verification only' })).rejects.toThrow();
-      expect((await db.user.findUniqueOrThrow({ where: { id: studentId } })).active).toBe(true);
+      await expect(
+        service.status(
+          {
+            id: randomUUID(),
+            name: 'Invalid actor',
+            email: 'invalid@freshman.test',
+            role: 'SUPER_ADMIN',
+            sessionId: randomUUID(),
+          },
+          studentId,
+          { status: 'SUSPENDED', reason: 'Rollback verification only' },
+        ),
+      ).rejects.toThrow();
+      expect(
+        (await db.user.findUniqueOrThrow({ where: { id: studentId } })).active,
+      ).toBe(true);
     });
     it('returns bounded safe related records and accurate overview totals', async () => {
-      for (const resource of ['courses', 'payments', 'progress', 'devices', 'audit-logs']) {
-        const result = await call(agents.SUPER_ADMIN, 'get', '/admin/students/' + studentId + '/' + resource + '?pageSize=1').expect(200);
+      for (const resource of [
+        'courses',
+        'payments',
+        'progress',
+        'devices',
+        'audit-logs',
+      ]) {
+        const result = await call(
+          agents.SUPER_ADMIN,
+          'get',
+          '/admin/students/' + studentId + '/' + resource + '?pageSize=1',
+        ).expect(200);
         expect(result.body.items.length).toBeLessThanOrEqual(1);
-        expect(JSON.stringify(result.body)).not.toMatch(/password_hash|token_hash|refresh_hash/);
+        expect(JSON.stringify(result.body)).not.toMatch(
+          /password_hash|token_hash|refresh_hash/,
+        );
       }
-      const summary = await call(agents.SUPER_ADMIN, 'get', '/dashboard').expect(200);
-      expect(summary.body.metrics.students).toBe(await db.user.count({ where: { role: 'STUDENT' } }));
+      const summary = await call(
+        agents.SUPER_ADMIN,
+        'get',
+        '/dashboard',
+      ).expect(200);
+      expect(summary.body.metrics.students).toBe(
+        await db.user.count({ where: { role: 'STUDENT' } }),
+      );
       expect(Array.isArray(summary.body.revenue)).toBe(true);
-      for (const path of ['/admin/records/enrollments', '/admin/records/progress', '/admin/records/devices', '/admin/revenue', '/admin/settings']) await call(agents.SUPER_ADMIN, 'get', path).expect(200);
+      for (const path of [
+        '/admin/records/enrollments',
+        '/admin/records/progress',
+        '/admin/records/devices',
+        '/admin/revenue',
+        '/admin/settings',
+      ])
+        await call(agents.SUPER_ADMIN, 'get', path).expect(200);
     });
     it('has no audit mutation endpoints', async () => {
-      const event = await db.auditLog.findFirstOrThrow({ where: { target_id: studentId } });
-      await call(agents.SUPER_ADMIN, 'patch', '/admin/students/' + studentId + '/audit-logs/' + event.id).send({ description: 'Edited history' }).expect(404);
-      await agents.SUPER_ADMIN.delete('/api/v1/admin/audit-logs/' + event.id).set('Origin', origin).expect(404);
-      expect(await db.auditLog.findUnique({ where: { id: event.id } })).not.toBeNull();
+      const event = await db.auditLog.findFirstOrThrow({
+        where: { target_id: studentId },
+      });
+      await call(
+        agents.SUPER_ADMIN,
+        'patch',
+        '/admin/students/' + studentId + '/audit-logs/' + event.id,
+      )
+        .send({ description: 'Edited history' })
+        .expect(404);
+      await agents.SUPER_ADMIN.delete('/api/v1/admin/audit-logs/' + event.id)
+        .set('Origin', origin)
+        .expect(404);
+      expect(
+        await db.auditLog.findUnique({ where: { id: event.id } }),
+      ).not.toBeNull();
     });
   });
-
 });
