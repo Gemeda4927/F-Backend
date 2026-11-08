@@ -1,3 +1,4 @@
+import { PushWorker } from './push.worker.js';
 import {
   Body,
   Controller,
@@ -80,6 +81,7 @@ export class NotificationsController {
     if (u.role !== 'STUDENT') return;
     const upcoming = await this.db.assessment.findMany({
       where: {
+        published: true,
         due_at: { gt: new Date(), lte: new Date(Date.now() + 86400000) },
         submissions: { none: { student_id: u.id } },
         course: {
@@ -199,5 +201,5 @@ export class NotificationsController {
     return { recipients: delivered.count };
   }
 }
-@Module({ imports: [CoursesModule], controllers: [NotificationsController] })
+@Module({ imports: [CoursesModule], controllers: [NotificationsController], providers: [PushWorker] })
 export class NotificationsModule {}

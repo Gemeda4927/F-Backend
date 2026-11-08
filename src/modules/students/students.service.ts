@@ -30,7 +30,7 @@ export class StudentsService {
       }, orderBy: [{ [q.sort]: q.direction }, { id: 'asc' }], ...paging(q) }),
       this.db.user.count({ where }),
     ], { isolationLevel: 'RepeatableRead' });
-    const payments = await this.db.payment.groupBy({ by: ['user_id', 'currency'], where: { user_id: { in: rows.map(r => r.id) }, status: 'SUCCEEDED' }, _sum: { amount_minor: true }, _count: true });
+    const payments = await this.db.payment.groupBy({ by: ['user_id', 'currency'], where: { user_id: { in: rows.map(r => r.id) }, status: 'SUCCEEDED', mode: 'live' }, _sum: { amount_minor: true }, _count: true });
     return envelope(rows.map(({ devices, _count, ...u }) => ({ ...u, status: accountStatus(u), course_count: _count.enrollments, device_registered: devices.length > 0,
       verified_payments: payments.filter(p => p.user_id === u.id).map(p => ({ currency: p.currency, amount_minor: p._sum.amount_minor ?? 0, count: p._count })),
     })), total, q);

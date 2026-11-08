@@ -14,7 +14,9 @@ import {
   Res,
   UploadedFile,
   UseInterceptors,
+  Delete,
 } from '@nestjs/common';
+import sharp from 'sharp';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import {
@@ -26,6 +28,7 @@ import {
   IsIn,
   IsInt,
   IsOptional,
+  IsObject,
   IsString,
   IsUUID,
   Max,
@@ -39,6 +42,17 @@ import type { Assessment, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CoursesModule } from '../courses/courses.module.js';
 import { CoursesService } from '../courses/courses.service.js';
+import {
+  validateBank,
+  validateResponses,
+  gradeBank,
+  publicQuestion,
+  answerReview,
+  shuffled,
+  type Question,
+  type Responses,
+  type Grade,
+} from './questions.js';
 import { notify, notifyCourse } from '../notifications/notifications.js';
 
 class AssessmentDto {
@@ -53,6 +67,19 @@ class AssessmentDto {
   @MinLength(3, { each: true })
   @MaxLength(2000, { each: true })
   questions?: string[];
+  @IsOptional() @IsArray() @ArrayMaxSize(200) question_bank?: unknown[];
+  @IsOptional() @IsBoolean() published?: boolean;
+  @IsOptional() @IsString() @MaxLength(120) chapter?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(100) passing_percent?: number;
+  @IsOptional()
+  @IsIn(['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
+  review_policy?: string;
+  @IsOptional() @IsBoolean() randomize_questions?: boolean;
+  @IsOptional() @IsBoolean() randomize_options?: boolean;
+  @IsOptional() @IsBoolean() allow_navigation?: boolean;
+  @IsOptional() @IsBoolean() allow_resume?: boolean;
+  @IsOptional() @IsBoolean() practice?: boolean;
+  @IsOptional() @IsInt() @Min(1) expected_revision?: number;
   @IsOptional() @IsDateString() opens_at?: string | null;
   @IsOptional() @IsDateString() due_at?: string | null;
   @IsOptional() @IsInt() @Min(1) @Max(1440) duration_minutes?: number | null;
@@ -77,13 +104,23 @@ class AnswerDto {
   expected_questions?: string[];
   @IsOptional() @IsString() @MaxLength(20000) expected_prompt?: string;
   @IsOptional() @IsInt() @Min(1) @Max(10000) expected_max_score?: number;
+  @IsOptional() @IsObject() responses?: Responses;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsString({ each: true })
+  marked?: string[];
+  @IsOptional() @IsInt() @Min(0) save_version?: number;
+  @IsOptional() @IsInt() @Min(1) expected_revision?: number;
   @IsOptional() @IsUUID() attempt_id?: string;
+  @IsOptional() @IsUUID() attempt_key?: string;
   @IsOptional() @IsUUID() attachment_id?: string;
 }
 class ReviewDto {
   @IsInt() @Min(0) @Max(10000) score!: number;
   @IsString() @MaxLength(10000) feedback!: string;
   @IsOptional() @IsInt() @Min(1) expected_attempt?: number;
+  @IsOptional() @IsArray() @ArrayMaxSize(200) grading?: Grade[];
 }
 class ResultDto {
   @IsBoolean() results_published!: boolean;
@@ -123,11 +160,34 @@ export class AssessmentsController {
       throw new BadRequestException('Deadline must be after the opening time');
     if (dto.kind !== 'EXAM' && dto.duration_minutes)
       throw new BadRequestException('Only exams can be timed');
+    const bank =
+      dto.question_bank !== undefined
+        ? validateBank(dto.question_bank, dto.published !== false)
+        : undefined;
+    if (dto.review_policy === 'AFTER_CLOSE' && !dto.due_at)
+      throw new BadRequestException(
+        'Set a closing date for review after closing',
+      );
+    if (bank?.length && dto.kind !== 'EXAM')
+      throw new BadRequestException('Typed questions belong to exams');
     return {
+      question_bank: bank as Prisma.InputJsonValue | undefined,
+      structured: dto.question_bank !== undefined ? true : undefined,
+      published: dto.published,
+      chapter: dto.chapter,
+      passing_percent: dto.passing_percent,
+      review_policy: dto.review_policy,
+      randomize_questions: dto.randomize_questions,
+      randomize_options: dto.randomize_options,
+      allow_navigation: dto.allow_navigation,
+      allow_resume: dto.allow_resume,
+      practice: dto.practice,
       title: dto.title,
       kind: dto.kind,
       prompt: dto.prompt,
-      max_score: dto.max_score,
+      max_score: bank?.length
+        ? bank.reduce((sum, q) => sum + q.points, 0)
+        : dto.max_score,
       questions: dto.questions,
       duration_minutes: dto.duration_minutes,
       max_attempts: dto.max_attempts,
@@ -139,7 +199,9 @@ export class AssessmentsController {
   }
   private async allowed(u: CurrentUser, id: string) {
     const a = await this.db.assessment.findUnique({ where: { id } });
-    if (!a) throw new NotFoundException('Assessment not found');
+    if (!a || (u.role === 'STUDENT' && !a.published))
+      throw new NotFoundException('Assessment not found');
+    if (u.role !== 'STUDENT') await this.courses.assertOwner(u, a.course_id);
     if (!(await this.courses.canAccess(u, a.course_id)))
       throw new ForbiddenException('Course access required');
     return a;
@@ -154,15 +216,17 @@ export class AssessmentsController {
       const a = await tx.assessment.create({
         data: { ...this.data(dto), course_id: courseId },
       });
-      await notifyCourse(tx, courseId, {
-        event_key: `assessment:${a.id}`,
-        kind: a.kind,
-        title: `New ${a.kind.toLowerCase()}: ${a.title}`,
-        message: a.due_at
-          ? `Due ${a.due_at.toISOString()}`
-          : 'A new activity is ready in your course.',
-        href: `/learn/${courseId}/activities/${a.id}?type=assessment`,
-      });
+      await this.checkImages(tx, a);
+      if (a.published)
+        await notifyCourse(tx, courseId, {
+          event_key: `assessment:${a.id}`,
+          kind: a.kind,
+          title: `New ${a.kind.toLowerCase()}: ${a.title}`,
+          message: a.due_at
+            ? `Due ${a.due_at.toISOString()}`
+            : 'A new activity is ready in your course.',
+          href: `/learn/${courseId}/activities/${a.id}?type=assessment`,
+        });
       return a;
     });
   }
@@ -207,7 +271,38 @@ export class AssessmentsController {
         throw new ConflictException(
           'Activities with attempts or submissions cannot be edited; publish results separately',
         );
-      return tx.assessment.update({ where: { id }, data: this.data(dto) });
+      const current = await tx.assessment.findUniqueOrThrow({ where: { id } });
+      if (
+        dto.expected_revision !== undefined &&
+        dto.expected_revision !== current.revision
+      )
+        throw new ConflictException(
+          'This exam changed in another editor; reload before saving',
+        );
+      const updated = await tx.assessment.update({
+        where: { id },
+        data: {
+          ...this.data(
+            current.structured
+              ? Object.assign(new AssessmentDto(), dto, {
+                  question_bank:
+                    dto.question_bank ?? (current.question_bank as unknown[]),
+                })
+              : dto,
+          ),
+          revision: { increment: 1 },
+        },
+      });
+      await this.checkImages(tx, updated);
+      if (updated.published && !current.published)
+        await notifyCourse(tx, updated.course_id, {
+          event_key: `assessment:${id}`,
+          kind: updated.kind,
+          title: `New exam: ${updated.title}`,
+          message: 'A new exam is ready in your course.',
+          href: `/learn/${updated.course_id}/activities/${id}?type=assessment`,
+        });
+      return updated;
     });
   }
   @Permissions('courses:write') @Patch(':id/results') async publish(
@@ -243,9 +338,10 @@ export class AssessmentsController {
   }
   private async items(u: CurrentUser, where: Prisma.AssessmentWhereInput) {
     const rows = await this.db.assessment.findMany({
-      where,
+      where: u.role === 'STUDENT' ? { ...where, published: true } : where,
       orderBy: { created_at: 'desc' },
       include: {
+        _count: { select: { attempts: true, submissions: true } },
         course: courseInfo,
         submissions: {
           where: { student_id: u.id },
@@ -259,37 +355,100 @@ export class AssessmentsController {
             started_at: true,
             expires_at: true,
             submitted_at: true,
+            responses: true,
+            marked: true,
+            grading: true,
+            saved_at: true,
+            save_version: true,
+            question_order: true,
+            option_order: true,
           },
           orderBy: { number: 'desc' },
         },
       },
     });
-    return rows.map((a) => ({
-      ...a,
-      question_count: (a.questions as string[]).length,
-      questions:
-        u.role === 'STUDENT' &&
-        a.kind === 'EXAM' &&
-        !a.submissions.length &&
-        !a.attempts.some(
-          (attempt) =>
-            !attempt.submitted_at &&
-            (!attempt.expires_at || attempt.expires_at > new Date()),
-        )
-          ? []
-          : a.questions,
-      server_now: new Date().toISOString(),
-      submissions: a.submissions.map((s) =>
-        a.results_published || u.role !== 'STUDENT'
-          ? s
-          : { ...s, score: null, feedback: null, reviewed_at: null },
-      ),
-    }));
+    return rows.map((a) => {
+      const student = u.role === 'STUDENT';
+      const active = a.attempts.find(
+        (t) => !t.submitted_at && (!t.expires_at || t.expires_at > new Date()),
+      );
+      const bank = a.question_bank as Question[];
+      const canReview =
+        student &&
+        !!a.submissions[0]?.reviewed_at &&
+        a.results_published &&
+        a.review_policy !== 'NEVER' &&
+        (a.review_policy !== 'AFTER_CLOSE' ||
+          (!!a.due_at && a.due_at <= new Date()));
+      const visible = !student || !!active || canReview;
+      const attemptOrder = active?.question_order ?? [];
+      const ordered = attemptOrder.length
+        ? attemptOrder
+            .map((id) => bank.find((q) => q.id === id)!)
+            .filter(Boolean)
+        : bank;
+      return {
+        ...a,
+        question_count: bank.length || (a.questions as string[]).length,
+        question_bank: !student
+          ? bank
+          : visible
+            ? ordered.map((q) => {
+                const safe = publicQuestion(q);
+                const order = (
+                  active?.option_order as Record<string, string[]> | undefined
+                )?.[q.id];
+                return {
+                  ...safe,
+                  options: order
+                    ? order
+                        .map((id) => safe.options?.find((o) => o.id === id))
+                        .filter(
+                          (option): option is NonNullable<typeof option> =>
+                            !!option,
+                        )
+                    : safe.options,
+                };
+              })
+            : [],
+        typed: a.structured || !!bank.length,
+        has_attempts:
+          !student && (a._count.attempts > 0 || a._count.submissions > 0),
+        answer_review: canReview ? bank.map(answerReview) : [],
+        questions:
+          student && a.kind === 'EXAM' && !a.submissions.length && !active
+            ? []
+            : a.questions,
+        server_now: new Date().toISOString(),
+        attempts: a.attempts.map((t) => ({
+          ...t,
+          responses: !t.submitted_at && a.allow_resume ? t.responses : {},
+          grading: canReview || !student ? t.grading : [],
+        })),
+        submissions: a.submissions.map((s) =>
+          a.results_published || !student
+            ? {
+                ...s,
+                grading: canReview || !student ? s.grading : [],
+                pending_review: !s.reviewed_at,
+              }
+            : {
+                ...s,
+                score: null,
+                feedback: null,
+                reviewed_at: null,
+                grading: [],
+                pending_review: !s.reviewed_at,
+              },
+        ),
+      };
+    });
   }
   @Get('course/:courseId') async list(
     @User() u: CurrentUser,
     @Param('courseId', ParseUUIDPipe) courseId: string,
   ) {
+    if (u.role !== 'STUDENT') await this.courses.assertOwner(u, courseId);
     if (!(await this.courses.canAccess(u, courseId)))
       throw new ForbiddenException('Course access required');
     return this.items(u, { course_id: courseId });
@@ -328,6 +487,8 @@ export class AssessmentsController {
     a: Assessment,
   ) {
     assertAvailable(a);
+    if (a.published === false)
+      throw new ForbiddenException('This exam is a draft');
     if (!(await this.courses.canAccess(u, a.course_id, tx)))
       throw new ForbiddenException('Course access required');
     const latest = await tx.assessmentAttempt.findFirst({
@@ -343,8 +504,13 @@ export class AssessmentsController {
       latest &&
       !latest.submitted_at &&
       (!latest.expires_at || latest.expires_at > new Date())
-    )
+    ) {
+      if (!a.allow_resume)
+        throw new ConflictException(
+          'Resuming this exam is disabled; contact your instructor',
+        );
       return latest;
+    }
     const used = Math.max(latest?.number ?? 0, prior?.attempt_number ?? 0);
     if (used >= a.max_attempts)
       throw new ConflictException('Attempt limit reached');
@@ -356,6 +522,19 @@ export class AssessmentsController {
         assessment_id: a.id,
         student_id: u.id,
         number: used + 1,
+        question_order: a.randomize_questions
+          ? shuffled(((a.question_bank ?? []) as Question[]).map((q) => q.id))
+          : ((a.question_bank ?? []) as Question[]).map((q) => q.id),
+        option_order: Object.fromEntries(
+          ((a.question_bank ?? []) as Question[])
+            .filter((q) => q.options)
+            .map((q) => [
+              q.id,
+              a.randomize_options
+                ? shuffled(q.options!.map((o) => o.id))
+                : q.options!.map((o) => o.id),
+            ]),
+        ),
         expires_at:
           expires && a.due_at && a.due_at < expires ? a.due_at : expires,
       },
@@ -386,7 +565,6 @@ export class AssessmentsController {
     await this.allowed(u, id);
     return this.db.atomic(async (tx) => {
       const a = await tx.assessment.findUniqueOrThrow({ where: { id } });
-      assertAvailable(a);
       if (!(await this.courses.canAccess(u, a.course_id, tx)))
         throw new ForbiddenException('Course access required');
       const attempt = dto.attempt_id
@@ -398,12 +576,40 @@ export class AssessmentsController {
           : await this.startAttempt(tx, u, a);
       if (!attempt)
         throw new ConflictException('Start this activity before submitting');
-      if (attempt.submitted_at)
+      if (attempt.submitted_at) {
+        if (!a.structured)
+          throw new ConflictException('This attempt was already submitted');
+        const prior = await tx.assessmentSubmission.findUnique({
+          where: {
+            assessment_id_student_id: { assessment_id: id, student_id: u.id },
+          },
+        });
+        if (prior?.attempt_number === attempt.number)
+          return {
+            id: prior.id,
+            assessment_id: prior.assessment_id,
+            attempt_number: prior.attempt_number,
+            submitted_at: prior.submitted_at,
+            score: a.results_published ? prior.score : null,
+            pending_review: !prior.reviewed_at,
+          };
         throw new ConflictException('This attempt was already submitted');
+      }
+      assertAvailable(a);
       if (attempt.expires_at && new Date() >= attempt.expires_at)
         throw new ForbiddenException(
           'Time has expired; this attempt cannot be submitted',
         );
+      if (
+        a.allow_resume === false &&
+        !attempt.submitted_at &&
+        dto.attempt_key !== attempt.access_key
+      )
+        throw new ForbiddenException(
+          'This attempt cannot be resumed after leaving the page',
+        );
+      if (((a.question_bank ?? []) as Question[]).length)
+        return this.submitTyped(tx, u, a, attempt, dto);
       const questions = a.questions as string[];
       if (
         questions.length &&
@@ -484,6 +690,337 @@ export class AssessmentsController {
       });
       return s;
     });
+  }
+  private async checkImages(tx: Prisma.TransactionClient, a: Assessment) {
+    const bank = (a.question_bank ?? []) as Question[];
+    const ids = [
+      ...new Set(
+        bank
+          .flatMap((q) => [
+            q.image_id,
+            ...(q.options ?? []).map((o) => o.image_id),
+          ])
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    if (
+      ids.length &&
+      (await tx.assessmentImage.count({
+        where: { id: { in: ids }, assessment_id: a.id },
+      })) !== ids.length
+    )
+      throw new BadRequestException('Question images must belong to this exam');
+  }
+  private async submitTyped(
+    tx: Prisma.TransactionClient,
+    u: CurrentUser,
+    a: Assessment,
+    attempt: {
+      id: string;
+      number: number;
+      responses: Prisma.JsonValue;
+      save_version: number;
+    },
+    dto: AnswerDto,
+  ) {
+    if (dto.save_version !== attempt.save_version)
+      throw new ConflictException(
+        'Answers changed in another tab. Reload before submitting',
+      );
+    const bank = a.question_bank as Question[];
+    const responses = validateResponses(
+      bank,
+      dto.responses ?? attempt.responses,
+    );
+    if (
+      dto.expected_revision !== undefined &&
+      dto.expected_revision !== a.revision
+    )
+      throw new ConflictException('Exam changed; reload before submitting');
+    const grading = gradeBank(bank, responses);
+    const complete = grading.every((g) => g.earned !== null);
+    const score = complete
+      ? Math.round(grading.reduce((sum, g) => sum + g.earned!, 0))
+      : null;
+    const now = new Date();
+    const answer = bank
+      .map((q, i) => {
+        const v = responses[q.id];
+        const response =
+          q.options && Array.isArray(v)
+            ? v
+                .map((id) => q.options!.find((o) => o.id === id)?.text ?? id)
+                .join(', ')
+            : Array.isArray(v)
+              ? v.join(' | ')
+              : String(v ?? '(unanswered)');
+        return `${i + 1}. ${q.question}\n${response}`;
+      })
+      .join('\n\n');
+    const data = {
+      answer,
+      score,
+      grading: grading as Prisma.InputJsonValue,
+      feedback: null,
+      reviewed_at: complete ? now : null,
+      submitted_at: now,
+      attempt_number: attempt.number,
+      attachment_id: null,
+    };
+    await tx.assessmentAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        answer,
+        score,
+        grading: grading as Prisma.InputJsonValue,
+        responses,
+        submitted_at: now,
+      },
+    });
+    const s = await tx.assessmentSubmission.upsert({
+      where: {
+        assessment_id_student_id: { assessment_id: a.id, student_id: u.id },
+      },
+      create: { assessment_id: a.id, student_id: u.id, ...data },
+      update: data,
+    });
+    const course = await tx.course.findUniqueOrThrow({
+      where: { id: a.course_id },
+    });
+    await notify(tx, [course.instructor_id], {
+      course_id: a.course_id,
+      event_key: `submission:${attempt.id}`,
+      kind: 'SUBMISSION',
+      title: `New submission: ${a.title}`,
+      message: complete
+        ? 'Objective questions graded automatically.'
+        : `${u.name} submitted work requiring review.`,
+      href: '/dashboard/instructor/reviews',
+    });
+    return {
+      id: s.id,
+      assessment_id: s.assessment_id,
+      attempt_number: s.attempt_number,
+      submitted_at: s.submitted_at,
+      score: a.results_published ? s.score : null,
+      pending_review: !s.reviewed_at,
+    };
+  }
+  @Patch(':id/draft') async autosave(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AnswerDto,
+  ) {
+    if (u.role !== 'STUDENT')
+      throw new ForbiddenException('Student account required');
+    await this.allowed(u, id);
+    return this.db.atomic(async (tx) => {
+      const a = await tx.assessment.findUniqueOrThrow({ where: { id } });
+      assertAvailable(a);
+      if (!a.published || !(await this.courses.canAccess(u, a.course_id, tx)))
+        throw new ForbiddenException('Course access required');
+      const t = await tx.assessmentAttempt.findFirst({
+        where: {
+          id: dto.attempt_id ?? '00000000-0000-0000-0000-000000000000',
+          assessment_id: id,
+          student_id: u.id,
+        },
+      });
+      if (!t || t.submitted_at || (t.expires_at && t.expires_at <= new Date()))
+        throw new ConflictException('This attempt is no longer active');
+      if (a.allow_resume === false && dto.attempt_key !== t.access_key)
+        throw new ForbiddenException(
+          'This attempt cannot be resumed after leaving the page',
+        );
+      if (dto.save_version !== t.save_version)
+        throw new ConflictException(
+          'Answers changed in another tab. Reload before continuing',
+        );
+      const bank = a.question_bank as Question[];
+      const responses = validateResponses(bank, dto.responses);
+      const marked = dto.marked ?? [];
+      if (marked.some((id) => !bank.some((q) => q.id === id)))
+        throw new BadRequestException('Unknown marked question');
+      const updated = await tx.assessmentAttempt.update({
+        where: { id: t.id },
+        data: {
+          responses,
+          marked,
+          saved_at: new Date(),
+          save_version: { increment: 1 },
+        },
+      });
+      return { saved_at: updated.saved_at, save_version: updated.save_version };
+    });
+  }
+  @Permissions('courses:write') @Post(':id/duplicate') async duplicate(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const a = await this.allowed(u, id);
+    await this.courses.assertOwner(u, a.course_id);
+    return this.db.atomic(async (tx) => {
+      const original = await tx.assessment.findUniqueOrThrow({ where: { id } });
+      const { id: oldId, created_at, revision, ...values } = original;
+      void oldId;
+      void created_at;
+      void revision;
+      const copy = await tx.assessment.create({
+        data: {
+          ...values,
+          title: `${original.title.slice(0, 150)} (copy)`,
+          published: false,
+          question_bank: original.question_bank as Prisma.InputJsonValue,
+          questions: original.questions as Prisma.InputJsonValue,
+        },
+      });
+      const images = await tx.assessmentImage.findMany({
+        where: { assessment_id: id },
+      });
+      const map = new Map<string, string>();
+      for (const image of images) {
+        const uploaded = await tx.assessmentImage.create({
+          data: {
+            assessment_id: copy.id,
+            name: image.name,
+            mime_type: image.mime_type,
+            content: image.content,
+          },
+        });
+        map.set(image.id, uploaded.id);
+      }
+      const bank = (original.question_bank as Question[]).map((q) => ({
+        ...q,
+        image_id: q.image_id ? map.get(q.image_id) : undefined,
+        options: q.options?.map((o) => ({
+          ...o,
+          image_id: o.image_id ? map.get(o.image_id) : undefined,
+        })),
+      }));
+      return tx.assessment.update({
+        where: { id: copy.id },
+        data: { question_bank: bank as Prisma.InputJsonValue },
+      });
+    });
+  }
+  @Permissions('courses:write') @Delete(':id') async remove(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const a = await this.allowed(u, id);
+    await this.courses.assertOwner(u, a.course_id);
+    return this.db.atomic(async (tx) => {
+      if (
+        (await tx.assessmentAttempt.count({ where: { assessment_id: id } })) ||
+        (await tx.assessmentSubmission.count({
+          where: { assessment_id: id },
+        })) ||
+        (await tx.assessmentFile.count({ where: { assessment_id: id } }))
+      )
+        throw new ConflictException(
+          'An exam with student work cannot be deleted',
+        );
+      await tx.assessment.delete({ where: { id } });
+      return { deleted: true };
+    });
+  }
+  @Permissions('courses:write')
+  @Post(':id/images')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }),
+  )
+  async uploadImage(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    const a = await this.allowed(u, id);
+    await this.courses.assertOwner(u, a.course_id);
+    const b = file?.buffer;
+    const png =
+      b &&
+      b.length > 24 &&
+      b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const jpeg =
+      b &&
+      b.length > 4 &&
+      b[0] === 255 &&
+      b[1] === 216 &&
+      b[2] === 255 &&
+      b[b.length - 2] === 255 &&
+      b[b.length - 1] === 217;
+    const webp =
+      b &&
+      b.length > 16 &&
+      b.subarray(0, 4).toString() === 'RIFF' &&
+      b.subarray(8, 12).toString() === 'WEBP';
+    const mime = png
+      ? 'image/png'
+      : jpeg
+        ? 'image/jpeg'
+        : webp
+          ? 'image/webp'
+          : null;
+    if (!file || !mime || mime !== file.mimetype)
+      throw new BadRequestException(
+        'Upload a PNG, JPEG, or WebP image, up to 2 MB',
+      );
+    let content: Buffer;
+    try {
+      content = await sharp(file.buffer, { limitInputPixels: 16000000 })
+        .rotate()
+        .toFormat(png ? 'png' : jpeg ? 'jpeg' : 'webp')
+        .toBuffer();
+    } catch {
+      throw new BadRequestException('The image could not be decoded safely');
+    }
+    if (content.length > 2 * 1024 * 1024)
+      throw new BadRequestException('The processed image exceeds 2 MB');
+    return this.db.atomic(async (tx) => {
+      if (
+        (await tx.assessmentImage.count({ where: { assessment_id: id } })) >=
+        100
+      )
+        throw new ConflictException('Image limit reached (100 per exam)');
+      return tx.assessmentImage.create({
+        data: {
+          assessment_id: id,
+          name: file.originalname
+            .replace(/[^a-zA-Z0-9._ -]/g, '_')
+            .slice(0, 120),
+          mime_type: mime,
+          content: Uint8Array.from(content),
+        },
+        select: { id: true, name: true },
+      });
+    });
+  }
+  @Get('images/:imageId') async image(
+    @User() u: CurrentUser,
+    @Param('imageId', ParseUUIDPipe) imageId: string,
+    @Res() res: Response,
+  ) {
+    const image = await this.db.assessmentImage.findUnique({
+      where: { id: imageId },
+      include: { assessment: true },
+    });
+    if (!image) throw new NotFoundException();
+    const a = await this.allowed(u, image.assessment_id);
+    if (u.role === 'STUDENT') {
+      const item = (await this.items(u, { id: a.id }))[0];
+      const qs = item.question_bank as ReturnType<typeof publicQuestion>[];
+      if (
+        !qs.some(
+          (q) =>
+            q.image_id === imageId ||
+            q.options?.some((o) => o.image_id === imageId),
+        )
+      )
+        throw new ForbiddenException('Start this exam to view its images');
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.type(image.mime_type).send(Buffer.from(image.content));
   }
   @Post(':id/attachment')
   @UseInterceptors(
@@ -584,11 +1121,38 @@ export class AssessmentsController {
     await this.courses.assertOwner(u, s.assessment.course_id);
     if (dto.score > s.assessment.max_score)
       throw new ConflictException('Score exceeds maximum');
+    let grading = s.grading as Grade[];
+    if (((s.assessment.question_bank ?? []) as Question[]).length) {
+      if (!Array.isArray(dto.grading) || dto.grading.length !== grading.length)
+        throw new BadRequestException('Review every question');
+      grading = grading.map((g) => {
+        const provided = dto.grading!.filter((x) => x.id === g.id);
+        if (provided.length !== 1)
+          throw new BadRequestException('Invalid question grades');
+        const p = provided[0];
+        if (
+          typeof p.earned !== 'number' ||
+          !Number.isFinite(p.earned) ||
+          p.earned < 0 ||
+          p.earned > g.points ||
+          (p.feedback !== undefined &&
+            (typeof p.feedback !== 'string' || p.feedback.length > 2000))
+        )
+          throw new BadRequestException('Question grade exceeds its marks');
+        return {
+          ...g,
+          earned: Math.round(p.earned * 100) / 100,
+          feedback: p.feedback,
+        };
+      });
+      dto.score = Math.round(grading.reduce((sum, g) => sum + g.earned!, 0));
+    }
     return this.db.atomic(async (tx) => {
       const updated = await tx.assessmentSubmission.updateMany({
         where: { id, attempt_number: dto.expected_attempt ?? s.attempt_number },
         data: {
           score: dto.score,
+          grading: grading as Prisma.InputJsonValue,
           feedback: dto.feedback,
           reviewed_at: new Date(),
         },
@@ -603,7 +1167,11 @@ export class AssessmentsController {
           student_id: s.student_id,
           number: s.attempt_number,
         },
-        data: { score: dto.score, feedback: dto.feedback },
+        data: {
+          score: dto.score,
+          feedback: dto.feedback,
+          grading: grading as Prisma.InputJsonValue,
+        },
       });
       if (
         (
@@ -622,6 +1190,7 @@ export class AssessmentsController {
         });
       return {
         ...s,
+        grading,
         score: dto.score,
         feedback: dto.feedback,
         reviewed_at: new Date(),

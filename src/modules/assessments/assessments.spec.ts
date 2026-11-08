@@ -11,7 +11,9 @@ describe('assessment authorization', () => {
   it('rejects submissions without course access', async () => {
     const db = {
       assessment: {
-        findUnique: vi.fn().mockResolvedValue({ course_id: 'course' }),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ course_id: 'course', published: true }),
       },
       assessmentSubmission: { create: vi.fn() },
     };
@@ -76,7 +78,9 @@ describe('assessment authorization', () => {
     };
     const db = {
       assessment: {
-        findUnique: vi.fn().mockResolvedValue({ course_id: 'course' }),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ course_id: 'course', published: true }),
       },
       atomic: (work: (transaction: typeof tx) => unknown) => work(tx),
     };
@@ -115,6 +119,9 @@ describe('assessment authorization', () => {
     const questions = ['First question?', 'Second question?'];
     const create = vi.fn().mockResolvedValue({ id: 'submission' });
     const current = {
+      published: true,
+      allow_resume: true,
+      question_bank: [],
       id: 'assessment',
       course_id: 'course',
       questions,

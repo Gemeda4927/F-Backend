@@ -99,6 +99,16 @@ model RolePermission {
 }
 
 model StudentDevice {
+  @@index([user_id], map: "devices_active_user", where: { revoked_at: null })
+  installation_hash String?
+  fcm_token_encrypted String?
+  fcm_token_hash String?
+  platform String @default("web")
+  browser String?
+  operating_system String?
+  push_updated_at DateTime? @db.Timestamptz(6)
+  @@unique([fcm_token_hash], map: "one_active_fcm_registration", where: { revoked_at: null })
+  @@unique([installation_hash], map: "one_active_installation", where: { revoked_at: null })
   id            String        @id @default(uuid()) @db.Uuid
   user_id       String        @db.Uuid
   token_hash    String        @unique
@@ -109,7 +119,6 @@ model StudentDevice {
   user          User          @relation(fields: [user_id], references: [id], onDelete: Restrict)
   sessions      AuthSession[]
 
-  @@unique([user_id], map: "one_registered_device_per_student", where: { revoked_at: null })
   @@map("devices")
 }
 
@@ -236,6 +245,19 @@ model Assessment {
   kind        String
   prompt      String
   questions   Json     @default("[]")
+  question_bank Json @default("[]")
+  structured Boolean @default(false)
+  published Boolean @default(true)
+  chapter String @default("")
+  passing_percent Int @default(60)
+  review_policy String @default("AFTER_SUBMISSION")
+  randomize_questions Boolean @default(false)
+  randomize_options Boolean @default(false)
+  allow_navigation Boolean @default(true)
+  allow_resume Boolean @default(true)
+  practice Boolean @default(false)
+  revision Int @default(1)
+  images AssessmentImage[]
   max_score   Int      @default(100)
   created_at  DateTime @default(now()) @db.Timestamptz(6)
   opens_at DateTime? @db.Timestamptz(6)
@@ -262,6 +284,7 @@ model AssessmentSubmission {
   score         Int?
   feedback      String?
   reviewed_at   DateTime? @db.Timestamptz(6)
+  grading Json @default("[]")
   attempt_number Int @default(1)
   attachment_id String? @unique @db.Uuid
   attachment AssessmentFile? @relation(fields: [attachment_id], references: [id], onDelete: Restrict)
@@ -301,6 +324,14 @@ model AssessmentAttempt {
   expires_at DateTime? @db.Timestamptz(6)
   submitted_at DateTime? @db.Timestamptz(6)
   answer String?
+  responses Json @default("{}")
+  grading Json @default("[]")
+  marked String[] @default([])
+  question_order String[] @default([])
+  option_order Json @default("{}")
+  saved_at DateTime? @db.Timestamptz(6)
+  save_version Int @default(0)
+  access_key String @default(uuid()) @db.Uuid
   score Int?
   feedback String?
   assessment Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
@@ -325,6 +356,9 @@ model AssessmentFile {
 }
 
 model Notification {
+  push_delivered_at DateTime? @db.Timestamptz(6)
+  push_claimed_at DateTime? @db.Timestamptz(6)
+  push_attempts Int @default(0)
   id String @id @default(uuid()) @db.Uuid
   user_id String @db.Uuid
   course_id String? @db.Uuid
@@ -343,6 +377,9 @@ model Notification {
 }
 
 model Payment {
+  @@index([mode, status], map: "payments_mode_status")
+  mode String @default("unknown")
+  verified_at DateTime? @db.Timestamptz(6)
   id              String       @id @default(uuid()) @db.Uuid
   user_id         String       @db.Uuid
   course_id       String       @db.Uuid
@@ -449,4 +486,15 @@ model LegacySchemaMigration {
   applied_at DateTime @default(now()) @db.Timestamptz(6)
 
   @@map("schema_migrations")
+}
+
+model AssessmentImage {
+  id String @id @default(uuid()) @db.Uuid
+  assessment_id String @db.Uuid
+  name String
+  mime_type String
+  content Bytes
+  assessment Assessment @relation(fields: [assessment_id], references: [id], onDelete: Cascade)
+  @@index([assessment_id])
+  @@map("assessment_images")
 }

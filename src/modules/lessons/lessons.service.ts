@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -90,6 +91,20 @@ export class LessonsService {
       });
       if (!existing) throw new NotFoundException();
       return this.db.atomic(async (tx) => {
+        await this.courses.assertOwner(user, courseId, tx);
+        if (
+          await tx.lesson.findFirst({
+            where: {
+              course_id: courseId,
+              position: dto.position,
+              id: { not: id },
+            },
+            select: { id: true },
+          })
+        )
+          throw new ConflictException(
+            `Content order ${dto.position} is already used in this course. Choose a different order.`,
+          );
         const updated = await tx.lesson.update({
           where: { id },
           data,
@@ -106,6 +121,16 @@ export class LessonsService {
       });
     }
     return this.db.atomic(async (tx) => {
+        await this.courses.assertOwner(user, courseId, tx);
+      if (
+        await tx.lesson.findFirst({
+          where: { course_id: courseId, position: dto.position },
+          select: { id: true },
+        })
+      )
+        throw new ConflictException(
+          `Content order ${dto.position} is already used in this course. Choose a different order.`,
+        );
       const lesson = await tx.lesson.create({
         data: { ...data, course_id: courseId },
         select: { id: true },

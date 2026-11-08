@@ -1,3 +1,4 @@
+import { IsUUID, IsString, MinLength, MaxLength } from 'class-validator';
 import {
   Body,
   BadRequestException,
@@ -24,6 +25,10 @@ import {
 import type { CurrentUser } from '../../common/types.js';
 import { CoursesService } from './courses.service.js';
 import { CourseDto } from './courses.dto.js';
+class TransferOwnerDto {
+  @IsUUID() instructor_id!: string;
+  @IsString() @MinLength(5) @MaxLength(500) reason!: string;
+}
 @Controller('courses')
 class CoursesController {
   constructor(private readonly service: CoursesService) {}
@@ -37,6 +42,12 @@ class CoursesController {
     @User() u: CurrentUser,
   ) {
     return this.service.owned(u);
+  }
+  @Permissions('courses:write') @Get('manage/:id') managedDetails(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.managedDetails(u, id);
   }
   @Permissions('courses:write') @Get('manage/:id/preview') preview(
     @User() u: CurrentUser,
@@ -91,6 +102,13 @@ class CoursesController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.service.removeThumbnail(u, id);
+  }
+  @Permissions('courses:write') @Post(':id/owner') transfer(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TransferOwnerDto,
+  ) {
+    return this.service.transfer(u, id, dto.instructor_id, dto.reason);
   }
   @Permissions('courses:write') @Post() create(
     @User() u: CurrentUser,

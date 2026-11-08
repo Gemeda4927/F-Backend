@@ -61,10 +61,13 @@ export class AuthGuard implements CanActivate {
             .digest('hex') !== device.token_hash)
       )
         throw Error('Device revoked');
+      if (device && device.last_seen_at.getTime() < Date.now() - 300000)
+        await this.db.studentDevice.updateMany({ where: { id: device.id, revoked_at: null }, data: { last_seen_at: new Date() } });
       if (!user.roleDefinition || user.roleDefinition.name !== user.role)
         throw Error('Role configuration missing');
       grants = user.roleDefinition.permissions.map((p) => p.permission_code);
       req.user = {
+        permissions: grants,
         id: user.id,
         name: user.name,
         email: user.email,

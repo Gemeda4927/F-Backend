@@ -28,11 +28,11 @@ hand-written SQL CRUD, raw Prisma queries or custom SQL migration runner remains
 
 ```sh
 npm ci
-cp .env.example .env
+touch .env
 npx prisma generate
 ```
 
-PowerShell: `Copy-Item .env.example .env`. Merge an existing environment file
+PowerShell: create `.env` if it does not exist, then configure the environment variables listed below. Preserve an existing environment file
 instead of overwriting credentials. Set DATABASE_URL to your actual database,
 using your local PostgreSQL or hosted database connection. For hosted pooling, set DIRECT_URL to the corresponding direct connection.
 Generation does not create tables or require database access.
@@ -318,3 +318,33 @@ For migration connection failures, verify PostgreSQL availability and DIRECT_URL
 ## Chapter organization
 
 Course topics keep their existing IDs, content, access checks and progress records. The optional authoring field `chapter` groups related topics and quizzes; legacy topics default to `Getting started`. Public outlines, protected learning details, authoring lists and previews expose the chapter label without exposing protected content or quiz answer keys. Chapters are ordered by their first topic position. Apply additive migration `20261107170000_course_chapters` before deploying the updated backend/frontend.
+
+
+## Typed exams
+
+Apply additive migration `20261108110000_typed_exam_builder` using `npm run db:deploy`, then deploy the API before the frontend. Existing plain-text exams, assignments, submissions, and attempt history are retained. The existing assessment model now stores a validated typed `question_bank` and settings. The legacy `questions` field remains supported. New structured drafts can be incomplete and are excluded from student lists and notifications. Publishing requires valid answers, explanations, image ownership, and total marks no greater than 10000 (up to 200 questions). Exams with attempts/submissions are immutable; duplicate them to create a new draft revision. Result publication remains independent.
+
+MCQ (single/multiple), blanks with normalized alternatives/case/tolerance rules, and boolean questions are automatically graded. Short answers support manual or strict matching; coding is manual only, with no execution endpoint or hidden-test runner. Question scores support fractional credit; final exam totals are rounded to integer marks for compatibility with existing scores. Manual work remains pending and never receives final pass/fail status prematurely. Instructors review question scores and feedback before finalizing.
+
+Student JSON uses an explicit question allow-list. Answer keys/reference solutions/explanations are returned only for graded, published results under AFTER_SUBMISSION or AFTER_CLOSE rules; NEVER suppresses them. Draft autosave checks enrollment, attempt ownership, deadlines and an optimistic save version. Final typed submissions are idempotent for the same attempt and reject stale save versions. Non-resumable attempts require the key issued at start; detail responses do not expose that key. Randomization is persisted per attempt. Images are private, decoded/re-encoded with Sharp, bounded to 2 MB and 16 million input pixels, and scoped to their exam. SVG is rejected.
+
+Run `npm test` for grading/privacy units and `npm run test:postgres` for migrations and authenticated API integration. Temporary PostgreSQL clusters use the OS temp directory to avoid OneDrive locks and are stopped and removed with bounded cleanup retries. These tests never use the configured production database.
+
+
+## Course Studio metadata
+
+`GET /courses/manage/:id` uses the existing course-write permission and owner/administrator check. It returns course metadata, thumbnail presence and counts of topics, activities, and active enrollments without lesson bodies or answer keys. The frontend setup wizard creates a private/unpublished course through the existing POST endpoint; detailed settings continue to use the existing PATCH endpoint. This Studio change needs no additional database migration.
+
+
+## Ownership, installations, push, and test payments
+
+Deploy migrations before the updated API, including `20261108150000_device_push_payment_mode`. This additive migration preserves existing devices and purchases; legacy payments have mode `unknown` and are excluded from live revenue until separately reconciled. Newly initialized payments record the configured mode and verification timestamp. Test mode is permitted in deployed environments; live mode requires `CHAPA_ALLOW_LIVE=true` and a matching live secret. Hosted Chapa v1 checkout uses only the backend secret; no public/encryption key is needed for this flow. Set the rotated test secret and webhook secret through hosting environment settings. Real sandbox checkout cannot be certified without merchant credentials.
+
+Web sign-in sends a random installation UUID stored in localStorage, separate from the HTTP-only device authorization secret. Existing cookies remain valid and bind an installation on the next updated sign-in/registration. IDs alone never authorize requests. The server guard remains mandatory. A serializable transaction locks the user row before checking the configured active-device limit; globally unique installation/token indexes prevent duplicate associations. Another account cannot bind the same active installation. Browser storage clearing may require verified email recovery or audited administrator reset. This is a browser-installation policy, not hardware fingerprinting; the default is one active student installation; MAX_ACTIVE_STUDENT_DEVICES can explicitly permit 1-5. Signing in replaces sessions only for the same student installation; all-device administrative reset/recovery remains available.
+
+Optional FCM: set Firebase public configuration and VAPID key in the frontend, and `FIREBASE_PUSH_ENABLED=true`, `FIREBASE_PROJECT_ID`, a service account (JSON or application-default credentials), and a 64-hex-character `PUSH_TOKEN_ENCRYPTION_KEY` in the backend. Never put service-account credentials in NEXT_PUBLIC variables. Tokens use authenticated AES-256-GCM encryption at rest and are omitted from user/admin device responses. Students opt into push in Profile; already granted registrations refresh hourly while signed in. Unsupported/denied push does not remove learning access. The worker sends generic inbox reminders after rechecking current access and active sessions, uses leased claims and bounded retries, and removes invalid FCM tokens. Delivery is best effort and may duplicate on transient provider failures; the persistent inbox is authoritative. Events older than 24 hours are not pushed. Reset/recovery revokes device authorization and sessions; old devices stop receiving future deliveries. Existing inbox producers cover course updates, lessons, deadlines, grades, enrollment, and verified payment.
+
+Course management uses verified-token ownership; clients never choose an owner during course creation. Only Super Admin may use `POST /courses/:id/owner` with an active instructor UUID and reason. Transfers preserve enrollments/content and produce an audit record. Admin actions retain permission checks; the Super Admin dashboard shows aggregate real data and date-filtered UTC registration/enrollment trends. Course approval reviews are not configured: courses use the existing direct-publication workflow, and the Pending Review filter explicitly explains that policy.
+
+
+Device change requests reuse the audit ledger (`DEVICE_CHANGE_REQUESTED`) rather than a duplicate device model. Current authorized students can post a reason; requests are idempotent until reset/recovery. Super Admin reviews pending requests from Device Management and verifies identity before the existing reset workflow. Request submission never authorizes a replacement device. Dashboard analytics additionally include recorded publication events, current active enrollment ranking, instructor publication activity, pricing mix, and live-only daily revenue separated by currency. Historical publication timestamps are not invented.

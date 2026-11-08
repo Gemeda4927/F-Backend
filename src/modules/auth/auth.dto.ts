@@ -1,5 +1,13 @@
-import { IsEmail, IsString, MinLength, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsUUID,
+  IsEmail,
+  IsString,
+  MinLength,
+  MaxLength,
+} from 'class-validator';
 export class LoginDto {
+  @IsOptional() @IsUUID() installation_id?: string;
   @IsEmail() @MaxLength(254) email!: string;
   @IsString() @MinLength(1) @MaxLength(72) password!: string;
 }

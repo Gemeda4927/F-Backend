@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 export type Role = 'SUPER_ADMIN' | 'ADMIN' | 'INSTRUCTOR' | 'STUDENT';
 export interface CurrentUser {
+  permissions?: readonly string[];
   id: string;
   email: string;
   name: string;

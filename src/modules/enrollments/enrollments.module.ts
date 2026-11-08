@@ -1,3 +1,4 @@
+import { notify } from '../notifications/notifications.js';
 import {
   Controller,
   ForbiddenException,
@@ -90,6 +91,7 @@ class EnrollmentsController {
           resourceType: 'COURSE',
           resourceId: id,
         });
+      await notify(tx, [u.id], { event_key: `enrolled:${enrollment.id}`, kind: 'ENROLLMENT', title: "You're enrolled", message: `Start learning: ${course.title}`, href: `/learn/${id}`, course_id: id });
       return { access: true };
     });
   }

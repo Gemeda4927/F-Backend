@@ -1,3 +1,4 @@
+import { activeDeviceLimit } from '../modules/devices/device-policy.js';
 export function getConfiguration() {
   const port = Number(process.env.PORT ?? 5000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -29,6 +30,7 @@ export function getConfiguration() {
 }
 
 export function validatePlatformEnvironment() {
+  activeDeviceLimit();
   for (const name of [
     'DATABASE_URL',
     'JWT_ACCESS_SECRET',
@@ -76,12 +78,24 @@ export function validatePlatformEnvironment() {
       !process.env.FRONTEND_URL!.startsWith('https:'))
   )
     throw new Error('Production requires HTTPS and secure cookies');
+  const mode = process.env.CHAPA_MODE ?? 'test';
+  if (!['test', 'live'].includes(mode))
+    throw new Error('CHAPA_MODE must be test or live');
+  if (mode === 'live' && process.env.CHAPA_ALLOW_LIVE !== 'true')
+    throw new Error('Live payments require explicit CHAPA_ALLOW_LIVE=true');
   if (
-    (process.env.APP_ENV ?? process.env.NODE_ENV) === 'production' &&
-    (process.env.CHAPA_MODE !== 'live' ||
-      process.env.CHAPA_SECRET_KEY?.includes('TEST'))
+    process.env.CHAPA_SECRET_KEY &&
+    ((mode === 'test' &&
+      !process.env.CHAPA_SECRET_KEY.startsWith('CHASECK_TEST-')) ||
+      (mode === 'live' && !process.env.CHAPA_SECRET_KEY.startsWith('CHASECK-')))
+  )
+    throw new Error('Chapa key does not match the configured mode');
+  if (
+    process.env.FIREBASE_PUSH_ENABLED === 'true' &&
+    (!process.env.FIREBASE_PROJECT_ID ||
+      !/^[a-f0-9]{64}$/i.test(process.env.PUSH_TOKEN_ENCRYPTION_KEY ?? ''))
   )
     throw new Error(
-      'Production payments require a live Chapa key and CHAPA_MODE=live',
+      'Firebase push requires project ID and a 64-character hex token encryption key',
     );
 }

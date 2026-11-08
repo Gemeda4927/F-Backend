@@ -1,6 +1,7 @@
 import { NoStoreInterceptor } from './common/interceptors/no-store.interceptor.js';
 import { loadEnvFile } from 'node:process';
 import { existsSync } from 'node:fs';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { NestFactory } from '@nestjs/core';
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -16,7 +17,10 @@ async function bootstrap() {
   validatePlatformEnvironment();
   const config = getConfiguration();
   const { AppModule } = await import('./app.module.js');
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
+  app.useBodyParser('json', { limit: '3mb' });
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cookieParser());
   app.enableCors({ origin: config.corsOrigins, credentials: true });

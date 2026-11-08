@@ -1,3 +1,4 @@
+import { activeDeviceLimit } from '../devices/device-policy.js';
 import {
   BadRequestException,
   ConflictException,
@@ -33,17 +34,21 @@ export class AuthService {
   }
   async register(dto: RegisterDto, device: string | undefined, agent: string) {
     this.passwordValid(dto.password);
-    await this.db.atomic(async tx => {
-    const user = await tx.user.create({
-      data: {
-        email: dto.email.toLowerCase().trim(),
-        name: dto.name.trim(),
-        password_hash: await bcrypt.hash(dto.password, 12),
-        role: 'STUDENT',
-        role_id: 'STUDENT',
-      },
-    });
-    await audit(tx, { target: user.id, action: 'ACCOUNT_REGISTERED', description: 'Student account created.' });
+    await this.db.atomic(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: dto.email.toLowerCase().trim(),
+          name: dto.name.trim(),
+          password_hash: await bcrypt.hash(dto.password, 12),
+          role: 'STUDENT',
+          role_id: 'STUDENT',
+        },
+      });
+      await audit(tx, {
+        target: user.id,
+        action: 'ACCOUNT_REGISTERED',
+        description: 'Student account created.',
+      });
     });
     return this.login(dto, device, agent);
   }
@@ -74,7 +79,12 @@ export class AuthService {
       ? await bcrypt.compare(dto.password, found.password_hash)
       : (await bcrypt.hash(dto.password, 12), false);
     if (!found || !valid || !found.active) {
-      if (found) await audit(this.db, { target: found.id, action: 'LOGIN_FAILED', description: 'Sign-in attempt rejected.' });
+      if (found)
+        await audit(this.db, {
+          target: found.id,
+          action: 'LOGIN_FAILED',
+          description: 'Sign-in attempt rejected.',
+        });
       throw new UnauthorizedException('Invalid email or password');
     }
     return this.db.atomic(async (tx) => {
@@ -88,21 +98,57 @@ export class AuthService {
       let deviceId: string | null = null,
         deviceToken = deviceCookie;
       if (user.role === 'STUDENT') {
-        const existing = await tx.studentDevice.findFirst({
+        const installationHash = dto.installation_id
+          ? digest(dto.installation_id)
+          : undefined;
+        if (deviceToken) {
+          const trusted = await tx.studentDevice.findFirst({
+            where: { token_hash: digest(deviceToken), revoked_at: null },
+          });
+          if (trusted && trusted.user_id !== user.id)
+            throw new ConflictException(
+              'This browser installation is already registered. Use verified recovery or contact support.',
+            );
+        }
+        if (installationHash) {
+          const association = await tx.studentDevice.findFirst({
+            where: { installation_hash: installationHash, revoked_at: null },
+          });
+          if (association && association.user_id !== user.id)
+            throw new ConflictException(
+              'This browser installation is already registered. Use account recovery or contact an administrator.',
+            );
+        }
+
+        const active = await tx.studentDevice.findMany({
           where: { user_id: user.id, revoked_at: null },
         });
+        const presentedTokenHash = deviceToken
+          ? digest(deviceToken)
+          : undefined;
+        const existing = active.find(
+          (device) => device.token_hash === presentedTokenHash,
+        );
         if (
-          existing &&
-          (!deviceToken || digest(deviceToken) !== existing.token_hash)
+          (!existing && active.length >= activeDeviceLimit()) ||
+          (existing &&
+            installationHash &&
+            existing.installation_hash &&
+            installationHash !== existing.installation_hash)
         )
           throw new ConflictException(
-            'DEVICE_REGISTERED: This account is registered to another browser. Ask an administrator to reset your device, or recover your account by email.',
+            'DEVICE_REGISTERED: The authorized installation limit has been reached or this registration changed. Use verified account recovery or ask an administrator for a device reset.',
           );
         if (existing) {
           deviceId = existing.id;
           await tx.studentDevice.update({
             where: { id: existing.id },
-            data: { last_seen_at: new Date() },
+            data: {
+              last_seen_at: new Date(),
+              ...(installationHash
+                ? { installation_hash: installationHash }
+                : {}),
+            },
           });
         } else {
           deviceToken = randomBytes(32).toString('hex');
@@ -110,15 +156,31 @@ export class AuthService {
             data: {
               user_id: user.id,
               token_hash: digest(deviceToken),
+              installation_hash: installationHash,
               label: agent.slice(0, 200) || 'Registered browser',
             },
           });
           deviceId = device.id;
-          await audit(tx, { actor: { id: user.id, name: user.name, role: user.role as CurrentUser['role'] }, target: user.id, action: 'DEVICE_REGISTERED', description: 'Learning browser registered.', resourceType: 'DEVICE', resourceId: device.id });
+          await audit(tx, {
+            actor: {
+              id: user.id,
+              name: user.name,
+              role: user.role as CurrentUser['role'],
+            },
+            target: user.id,
+            action: 'DEVICE_REGISTERED',
+            description: 'Learning browser registered.',
+            resourceType: 'DEVICE',
+            resourceId: device.id,
+          });
         }
       }
       await tx.authSession.updateMany({
-        where: { user_id: user.id, revoked_at: null },
+        where: {
+          user_id: user.id,
+          revoked_at: null,
+          ...(user.role === 'STUDENT' ? { device_id: deviceId } : {}),
+        },
         data: { revoked_at: new Date() },
       });
       const id = randomUUID(),
@@ -132,7 +194,17 @@ export class AuthService {
           expires_at: new Date(Date.now() + 30 * 86400000),
         },
       });
-      await audit(tx, { actor: { id: user.id, name: user.name, role: user.role as CurrentUser['role'] }, target: user.id, action: 'LOGIN_SUCCEEDED', description: 'Signed in successfully; previous sessions replaced.' });
+      await audit(tx, {
+        actor: {
+          id: user.id,
+          name: user.name,
+          role: user.role as CurrentUser['role'],
+        },
+        target: user.id,
+        action: 'LOGIN_SUCCEEDED',
+        description:
+          'Signed in successfully; previous sessions on this authorized installation replaced.',
+      });
       return { ...tokens, device: deviceToken, user: publicUser(user) };
     });
   }
@@ -190,9 +262,17 @@ export class AuthService {
     return result;
   }
   async logout(user: CurrentUser) {
-    await this.db.atomic(async tx => {
-      await tx.authSession.update({ where: { id: user.sessionId }, data: { revoked_at: new Date() } });
-      await audit(tx, { actor: user, target: user.id, action: 'LOGOUT', description: 'Signed out; session revoked.' });
+    await this.db.atomic(async (tx) => {
+      await tx.authSession.update({
+        where: { id: user.sessionId },
+        data: { revoked_at: new Date() },
+      });
+      await audit(tx, {
+        actor: user,
+        target: user.id,
+        action: 'LOGOUT',
+        description: 'Signed out; session revoked.',
+      });
     });
   }
   async forgot(email: string) {
@@ -251,21 +331,33 @@ export class AuthService {
         where: { user_id: reset.user_id, revoked_at: null },
         data: { revoked_at: new Date() },
       });
-      await audit(tx, { target: reset.user_id, action: 'PASSWORD_RECOVERY', description: 'Password recovered; device registration and sessions revoked.' });
+      await audit(tx, {
+        target: reset.user_id,
+        action: 'PASSWORD_RECOVERY',
+        description:
+          'Password recovered; device registration and sessions revoked.',
+      });
     });
     return {
       message: 'Password reset. Sign in to register your current browser.',
     };
   }
   profile(user: CurrentUser, name: string) {
-    return this.db.atomic(async tx => {
-    const result = await tx.user.update({
-      where: { id: user.id },
-      data: { name: name.trim() },
-      select: { id: true, email: true, name: true, role: true },
-    });
-    await audit(tx, { actor: user, target: user.id, action: "PROFILE_UPDATED", description: "Profile name updated.", oldValues: { name: user.name }, newValues: { name: result.name } });
-    return result;
+    return this.db.atomic(async (tx) => {
+      const result = await tx.user.update({
+        where: { id: user.id },
+        data: { name: name.trim() },
+        select: { id: true, email: true, name: true, role: true },
+      });
+      await audit(tx, {
+        actor: user,
+        target: user.id,
+        action: 'PROFILE_UPDATED',
+        description: 'Profile name updated.',
+        oldValues: { name: user.name },
+        newValues: { name: result.name },
+      });
+      return result;
     });
   }
 }

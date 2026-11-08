@@ -1,3 +1,5 @@
+import sharp from 'sharp';
+import type { Question, Grade } from '../src/modules/assessments/questions.js';
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { ThrottlerGuard } from '@nestjs/throttler';
@@ -35,6 +37,8 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     path: string,
   ) => agent[method]('/api/v1' + path).set('Origin', origin);
   beforeAll(async () => {
+    process.env.MAX_ACTIVE_STUDENT_DEVICES = '1';
+    process.env.FIREBASE_PUSH_ENABLED = 'false';
     process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
     process.env.PRIVATE_STORAGE_DIR = '.test-postgres/materials';
     process.env.JWT_ACCESS_SECRET = 'test-access-secret-01234567890123456789';
@@ -341,6 +345,61 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         },
         include: { lessons: true },
       });
+    const publicCard = await db.course.create({
+      data: {
+        title: 'Catalog metadata check',
+        description: 'A course with protected learning content.',
+        category: 'Health Sciences',
+        instructor_id: ids.INSTRUCTOR,
+        published: true,
+        visibility: 'PUBLIC',
+        price_minor: 30000,
+        currency: 'ETB',
+        lessons: {
+          create: [
+            {
+              title: 'First',
+              chapter: 'Foundations',
+              position: 0,
+              kind: 'TEXT',
+              preview: true,
+              content: 'private lesson body',
+            },
+            {
+              title: 'Second',
+              chapter: 'Foundations',
+              position: 1,
+              kind: 'QUIZ',
+              preview: false,
+              content: 'private quiz body',
+            },
+            {
+              title: 'Third',
+              chapter: 'Practice',
+              position: 2,
+              kind: 'TEXT',
+              preview: false,
+            },
+          ],
+        },
+        assessments: {
+          create: [
+            {
+              title: 'Released activity',
+              kind: 'ASSIGNMENT',
+              prompt: 'private instructions',
+              published: true,
+            },
+            {
+              title: 'Hidden draft',
+              kind: 'EXAM',
+              prompt: 'draft instructions',
+              published: false,
+            },
+          ],
+        },
+      },
+    });
     const privateCourse = await make('Private course', 'PRIVATE');
     const unlisted = await make('Unlisted course', 'UNLISTED');
     const draft = await make('Draft course', 'PUBLIC', false);
@@ -348,6 +407,21 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     const catalog = await request(app.getHttpServer())
       .get('/api/v1/courses')
       .expect(200);
+    const card = catalog.body.find(
+      (item: { id: string }) => item.id === publicCard.id,
+    );
+    expect(card).toMatchObject({
+      lesson_count: 3,
+      chapter_count: 2,
+      assessment_count: 1,
+      enrollment_count: 0,
+      preview_count: 1,
+      quiz_count: 1,
+    });
+    expect(card).not.toHaveProperty('lessons');
+    expect(card).not.toHaveProperty('assessments');
+    expect(JSON.stringify(card)).not.toContain('private lesson body');
+    expect(JSON.stringify(card)).not.toContain('Hidden draft');
     const index = await request(app.getHttpServer())
       .get('/api/v1/courses/indexable')
       .expect(200);
@@ -1520,6 +1594,21 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         ],
       })
       .expect(201);
+    const orderConflict = await call(
+      members.author,
+      'post',
+      '/lessons/course/' + course.id,
+    )
+      .send({
+        title: 'Duplicate topic order',
+        chapter: 'Evidence and reasoning',
+        position: 0,
+        kind: 'TEXT',
+        preview: false,
+        content: 'A second topic cannot use an occupied order.',
+      })
+      .expect(409);
+    expect(orderConflict.body.message).toContain('Content order 0');
     const safeQuiz = await call(
       members.learner,
       'get',
@@ -1615,5 +1704,569 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       '/assessments/attachments/' + file.body.id,
     ).expect(403);
     await call(members.learner, 'get', '/assessments/' + a.id).expect(403);
+  });
+  it('builds typed exams, protects answer keys, autosaves, grades, and preserves attempts', async () => {
+    const members: Record<string, ReturnType<typeof request.agent>> = {};
+    const users: Record<string, string> = {};
+    for (const [key, role] of [
+      ['author', 'INSTRUCTOR'],
+      ['learner', 'STUDENT'],
+      ['outsider', 'STUDENT'],
+    ] as const) {
+      const user = await db.user.create({
+        data: {
+          email: `exam-${key}@freshman.test`,
+          name: `Exam ${key}`,
+          role,
+          role_id: role,
+          password_hash: await bcrypt.hash(password, 4),
+        },
+      });
+      users[key] = user.id;
+      members[key] = request.agent(app.getHttpServer());
+      await call(members[key], 'post', '/auth/login')
+        .send({ email: user.email, password })
+        .expect(200);
+    }
+    const course = await db.course.create({
+      data: {
+        title: 'Typed exam test course',
+        description: 'Isolated typed assessment tests',
+        instructor_id: users.author,
+        published: true,
+        visibility: 'PUBLIC',
+        price_minor: 0,
+      },
+    });
+    await call(
+      members.learner,
+      'post',
+      `/enrollments/${course.id}/free`,
+    ).expect(201);
+    const studio = await call(
+      members.author,
+      'get',
+      `/courses/manage/${course.id}`,
+    ).expect(200);
+    expect(studio.body.title).toBe(course.title);
+    expect(studio.body._count.enrollments).toBe(1);
+    expect(studio.body).not.toHaveProperty('lessons');
+    expect(studio.body).not.toHaveProperty('assessments');
+    await call(members.learner, 'get', `/courses/manage/${course.id}`).expect(
+      403,
+    );
+    await call(agents.INSTRUCTOR, 'get', `/courses/manage/${course.id}`).expect(
+      403,
+    );
+    const values = {
+      title: 'Six question types',
+      kind: 'EXAM',
+      prompt: 'Answer the objective questions, then explain your reasoning.',
+      max_score: 30,
+      published: false,
+      question_bank: [],
+      max_attempts: 1,
+      results_published: false,
+      review_policy: 'AFTER_CLOSE',
+      due_at: new Date(Date.now() + 3600000).toISOString(),
+      randomize_questions: true,
+      randomize_options: true,
+      allow_resume: true,
+    };
+    const draft = await call(
+      members.author,
+      'post',
+      `/assessments/course/${course.id}`,
+    )
+      .send(values)
+      .expect(201);
+    const id = draft.body.id,
+      path = `/assessments/${id}`;
+    await call(members.learner, 'get', path).expect(404);
+    expect(
+      (
+        await call(
+          members.learner,
+          'get',
+          `/assessments/course/${course.id}`,
+        ).expect(200)
+      ).body,
+    ).toEqual([]);
+    const pixels = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: 'red' },
+    })
+      .png()
+      .toBuffer();
+    await call(members.outsider, 'post', `${path}/images`)
+      .attach('file', pixels, {
+        filename: 'test.png',
+        contentType: 'image/png',
+      })
+      .expect(403);
+    await call(members.author, 'post', `${path}/images`)
+      .attach('file', Buffer.from('<svg></svg>'), {
+        filename: 'test.svg',
+        contentType: 'image/svg+xml',
+      })
+      .expect(400);
+    const image = await call(members.author, 'post', `${path}/images`)
+      .attach('file', pixels, {
+        filename: 'test.png',
+        contentType: 'image/png',
+      })
+      .expect(201);
+    const base = {
+      points: 5,
+      difficulty: 'MEDIUM' as const,
+      explanation: 'Detailed private answer explanation',
+    };
+    const bank: Question[] = [
+      {
+        ...base,
+        id: 'mcq',
+        type: 'MCQ',
+        question: 'Choose both primes',
+        options: [
+          { id: 'a', text: '2' },
+          { id: 'b', text: '3' },
+          { id: 'c', text: '4' },
+        ],
+        correct: ['a', 'b'],
+      },
+      {
+        ...base,
+        id: 'blank',
+        type: 'BLANK',
+        question: 'Python is a ___ language.',
+        accepted: [['high-level', 'high level']],
+      },
+      {
+        ...base,
+        id: 'boolean',
+        type: 'BOOLEAN',
+        question: 'Evidence never matters.',
+        correct_boolean: false,
+      },
+      {
+        ...base,
+        id: 'short',
+        type: 'SHORT',
+        question: 'Explain the claim.',
+        model_answer: 'A private model answer',
+        grading_mode: 'MANUAL',
+      },
+      {
+        ...base,
+        id: 'code',
+        type: 'CODE',
+        question: 'Return the integer two.',
+        model_answer: 'return 2',
+        language: 'python',
+        starter_code: '# write code',
+        samples: [{ input: '', output: '2' }],
+        time_limit_ms: 2000,
+        memory_limit_mb: 128,
+      },
+      {
+        ...base,
+        id: 'image',
+        type: 'IMAGE',
+        response_type: 'BOOLEAN',
+        question: 'Is this image red?',
+        image_id: image.body.id,
+        image_alt: 'A small red square',
+        correct_boolean: true,
+      },
+    ];
+    const published = {
+      ...values,
+      published: true,
+      question_bank: bank,
+      expected_revision: draft.body.revision,
+    };
+    await call(members.author, 'patch', path)
+      .send({
+        ...published,
+        question_bank: bank.map((q) => ({ ...q, explanation: '' })),
+      })
+      .expect(400);
+    const exam = (
+      await call(members.author, 'patch', path).send(published).expect(200)
+    ).body;
+    await call(agents.INSTRUCTOR, 'get', path).expect(403);
+    await call(members.outsider, 'get', path).expect(403);
+    const before = (await call(members.learner, 'get', path).expect(200)).body;
+    expect(before.question_bank).toEqual([]);
+    expect(before.answer_review).toEqual([]);
+    await call(
+      members.learner,
+      'get',
+      `/assessments/images/${image.body.id}`,
+    ).expect(403);
+    const started = (
+      await call(members.learner, 'post', `${path}/start`).expect(201)
+    ).body;
+    const safe = (await call(members.learner, 'get', path).expect(200)).body;
+    expect(safe.question_bank).toHaveLength(6);
+    expect(safe.has_attempts).toBe(false);
+    expect(safe.attempts[0]).not.toHaveProperty('access_key');
+    for (const q of safe.question_bank)
+      for (const key of [
+        'correct',
+        'accepted',
+        'correct_boolean',
+        'explanation',
+        'model_answer',
+      ])
+        expect(q).not.toHaveProperty(key);
+    await call(
+      members.learner,
+      'get',
+      `/assessments/images/${image.body.id}`,
+    ).expect(200);
+    const responses = {
+      mcq: ['b', 'a'],
+      blank: ['HIGH LEVEL'],
+      boolean: false,
+      short: 'My reasoning',
+      code: 'print(2)',
+      image: true,
+    };
+    await call(members.outsider, 'patch', `${path}/draft`)
+      .send({ attempt_id: started.id, responses, save_version: 0 })
+      .expect(403);
+    await call(members.learner, 'patch', `${path}/draft`)
+      .send({
+        attempt_id: started.id,
+        responses: { bad: 'injected' },
+        save_version: 0,
+      })
+      .expect(400);
+    await call(members.learner, 'patch', `${path}/draft`)
+      .send({
+        attempt_id: started.id,
+        responses,
+        marked: ['short'],
+        save_version: 0,
+      })
+      .expect(200);
+    await call(members.learner, 'patch', `${path}/draft`)
+      .send({ attempt_id: started.id, responses, save_version: 0 })
+      .expect(409);
+    const resumed = (
+      await call(members.learner, 'post', `${path}/start`).expect(201)
+    ).body;
+    expect(resumed.id).toBe(started.id);
+    expect(resumed.responses).toEqual(responses);
+    expect(resumed.marked).toEqual(['short']);
+    const submit = {
+      attempt_id: started.id,
+      responses,
+      expected_revision: exam.revision,
+      save_version: 1,
+    };
+    await call(members.learner, 'post', `${path}/submit`)
+      .send({ ...submit, save_version: 0 })
+      .expect(409);
+    const result = (
+      await call(members.learner, 'post', `${path}/submit`)
+        .send(submit)
+        .expect(201)
+    ).body;
+    expect(result.score).toBeNull();
+    expect(result.pending_review).toBe(true);
+    expect(result).not.toHaveProperty('grading');
+    const repeat = (
+      await call(members.learner, 'post', `${path}/submit`)
+        .send(submit)
+        .expect(201)
+    ).body;
+    expect(repeat.id).toBe(result.id);
+    await call(members.author, 'patch', path).send(published).expect(409);
+    await members.author
+      .delete('/api/v1' + path)
+      .set('Origin', origin)
+      .expect(409);
+    const submission = await db.assessmentSubmission.findUniqueOrThrow({
+      where: { id: result.id },
+    });
+    const grading = submission.grading as Grade[];
+    expect(grading.filter((g) => g.earned === null)).toHaveLength(2);
+    const graded = grading.map((g) => ({
+      ...g,
+      earned: g.points,
+      feedback: 'Reviewed correctly',
+    }));
+    await call(
+      members.author,
+      'patch',
+      `/assessments/submissions/${result.id}/review`,
+    )
+      .send({
+        score: 30,
+        feedback: 'Well done',
+        expected_attempt: 1,
+        grading: graded.map((g) => ({ ...g, earned: 100 })),
+      })
+      .expect(400);
+    await call(
+      members.author,
+      'patch',
+      `/assessments/submissions/${result.id}/review`,
+    )
+      .send({
+        score: 30,
+        feedback: 'Well done',
+        expected_attempt: 1,
+        grading: graded,
+      })
+      .expect(200);
+    expect(
+      (await call(members.learner, 'get', path).expect(200)).body.submissions[0]
+        .score,
+    ).toBeNull();
+    await call(members.author, 'patch', `${path}/results`)
+      .send({ results_published: true })
+      .expect(200);
+    const waiting = (await call(members.learner, 'get', path).expect(200)).body;
+    expect(waiting.submissions[0].score).toBe(30);
+    expect(waiting.answer_review).toEqual([]);
+    expect(waiting.submissions[0].grading).toEqual([]);
+    await db.assessment.update({
+      where: { id },
+      data: { due_at: new Date(Date.now() - 1000) },
+    });
+    const review = (await call(members.learner, 'get', path).expect(200)).body;
+    expect(review.answer_review).toHaveLength(6);
+    expect(
+      review.answer_review.find((q: Question) => q.id === 'code').model_answer,
+    ).toBe('return 2');
+    const copied = (
+      await call(members.author, 'post', `${path}/duplicate`).expect(201)
+    ).body;
+    expect(copied.published).toBe(false);
+    expect(
+      copied.question_bank.find((q: Question) => q.id === 'image').image_id,
+    ).not.toBe(image.body.id);
+    expect(
+      await db.assessmentAttempt.count({ where: { assessment_id: id } }),
+    ).toBe(1);
+    const objective = (
+      await call(members.author, 'post', `/assessments/course/${course.id}`)
+        .send({
+          ...values,
+          title: 'Objective never-review exam',
+          question_bank: bank.slice(0, 3),
+          published: true,
+          results_published: true,
+          review_policy: 'NEVER',
+          due_at: null,
+          allow_resume: false,
+        })
+        .expect(201)
+    ).body;
+    const op = `/assessments/${objective.id}`;
+    const active = (
+      await call(members.learner, 'post', `${op}/start`).expect(201)
+    ).body;
+    await call(members.learner, 'post', `${op}/start`).expect(409);
+    await call(members.learner, 'patch', `${op}/draft`)
+      .send({
+        attempt_id: active.id,
+        responses: { boolean: false },
+        save_version: 0,
+      })
+      .expect(403);
+    const done = (
+      await call(members.learner, 'post', `${op}/submit`)
+        .send({
+          attempt_id: active.id,
+          attempt_key: active.access_key,
+          save_version: 0,
+          responses: { mcq: ['a', 'b'], blank: ['high-level'], boolean: false },
+        })
+        .expect(201)
+    ).body;
+    expect(done.score).toBe(15);
+    expect(done.pending_review).toBe(false);
+    expect(done).not.toHaveProperty('grading');
+    const never = (await call(members.learner, 'get', op).expect(200)).body;
+    expect(never.answer_review).toEqual([]);
+    expect(never.question_bank).toEqual([]);
+    expect(never.submissions[0].grading).toEqual([]);
+    await db.courseEntitlement.updateMany({
+      where: { enrollment: { course_id: course.id, user_id: users.learner } },
+      data: { state: 'REVOKED' },
+    });
+    await call(members.learner, 'get', path).expect(403);
+    await call(
+      members.learner,
+      'get',
+      `/assessments/images/${image.body.id}`,
+    ).expect(403);
+  }, 60000);
+  it('binds installation identity independently of refreshed FCM tokens and revokes access after reset', async () => {
+    process.env.PUSH_TOKEN_ENCRYPTION_KEY = 'b'.repeat(64);
+    const install = randomUUID(),
+      first = request.agent(app.getHttpServer()),
+      second = request.agent(app.getHttpServer());
+    const email = `device-${randomUUID()}@freshman.test`;
+    await call(first, 'post', '/auth/register')
+      .send({
+        email,
+        password,
+        name: 'Device learner',
+        installation_id: install,
+      })
+      .expect(201);
+    const registration = {
+      installation_id: install,
+      browser: 'Test browser',
+      operating_system: 'Test OS',
+      fcm_token: 'test-fcm-registration-token-one',
+    };
+    await call(first, 'post', '/devices/me/register')
+      .send(registration)
+      .expect(201);
+    const before = await call(first, 'get', '/devices/me').expect(200);
+    expect(JSON.stringify(before.body)).not.toContain('test-fcm');
+    expect(before.body).not.toHaveProperty('installation_hash');
+    await call(first, 'post', '/devices/me/register')
+      .send({ ...registration, fcm_token: 'test-fcm-registration-token-two' })
+      .expect(201);
+    const after = await call(first, 'get', '/devices/me').expect(200);
+    expect(after.body.id).toBe(before.body.id);
+    const stored = await db.studentDevice.findUniqueOrThrow({
+      where: { id: before.body.id },
+    });
+    expect(stored.fcm_token_encrypted).not.toContain('test-fcm');
+    await call(second, 'post', '/auth/login')
+      .send({ email, password, installation_id: install })
+      .expect(409);
+    await call(first, 'post', '/devices/me/register')
+      .send({ ...registration, installation_id: randomUUID() })
+      .expect(409);
+    const target = await db.user.findUniqueOrThrow({ where: { email } });
+    await call(first, 'post', '/devices/me/change-request')
+      .send({ reason: 'Replacing a damaged learning installation' })
+      .expect(201);
+    await call(first, 'post', '/devices/me/change-request')
+      .send({ reason: 'Replacing a damaged learning installation' })
+      .expect(201);
+    const requests = await call(
+      agents.SUPER_ADMIN,
+      'get',
+      '/devices/requests',
+    ).expect(200);
+    expect(
+      requests.body.filter(
+        (row: { student_id: string }) => row.student_id === target.id,
+      ),
+    ).toHaveLength(1);
+    await call(first, 'get', '/auth/me').expect(200);
+    await call(
+      agents.SUPER_ADMIN,
+      'post',
+      `/devices/student/${target.id}/reset`,
+    )
+      .send({ reason: 'Verified administrative device recovery' })
+      .expect(201);
+    await call(first, 'get', '/auth/me').expect(401);
+    await call(second, 'post', '/auth/login')
+      .send({ email, password, installation_id: randomUUID() })
+      .expect(200);
+    delete process.env.PUSH_TOKEN_ENCRYPTION_KEY;
+  });
+  it('transfers course ownership only through Super Admin and immediately changes management scope', async () => {
+    const owner = await db.user.create({
+      data: {
+        email: `owner-${randomUUID()}@freshman.test`,
+        name: 'New course owner',
+        role: 'INSTRUCTOR',
+        role_id: 'INSTRUCTOR',
+        password_hash: await bcrypt.hash(password, 12),
+      },
+    });
+    const course = await db.course.create({
+      data: {
+        title: 'Ownership fixture',
+        description: 'Ownership test course with preserved records',
+        category: 'General',
+        price_minor: 0,
+        instructor_id: ids.INSTRUCTOR,
+      },
+    });
+    const other = request.agent(app.getHttpServer());
+    await call(other, 'post', '/auth/login')
+      .send({ email: owner.email, password })
+      .expect(200);
+    await call(other, 'get', `/courses/manage/${course.id}`).expect(403);
+    await call(other, 'post', `/courses/${course.id}/owner`)
+      .send({
+        instructor_id: owner.id,
+        reason: 'Unauthorized transfer attempt',
+      })
+      .expect(403);
+    await call(agents.SUPER_ADMIN, 'post', `/courses/${course.id}/owner`)
+      .send({
+        instructor_id: owner.id,
+        reason: 'Verified assignment to a new instructor',
+      })
+      .expect(201);
+    await call(other, 'get', `/courses/manage/${course.id}`).expect(200);
+    await call(agents.INSTRUCTOR, 'get', `/courses/manage/${course.id}`).expect(
+      403,
+    );
+    const list = await call(other, 'get', '/courses/manage/list').expect(200);
+    expect(
+      list.body.every(
+        (item: { instructor_id: string }) => item.instructor_id === owner.id,
+      ),
+    ).toBe(true);
+    const summary = await call(
+      agents.SUPER_ADMIN,
+      'get',
+      '/dashboard?days=7',
+    ).expect(200);
+    expect(summary.body.analytics.days).toBe(7);
+    expect(summary.body.metrics.free_courses).toBeGreaterThan(0);
+    const expected = await db.payment.aggregate({
+      where: { status: 'SUCCEEDED', mode: 'live', currency: 'ETB' },
+      _sum: { amount_minor: true },
+    });
+    expect(
+      summary.body.revenue.find(
+        (row: { currency: string }) => row.currency === 'ETB',
+      )?.amount_minor ?? 0,
+    ).toBe(expected._sum.amount_minor ?? 0);
+  });
+  it('honors the configurable installation limit without revoking another authorized installation', async () => {
+    process.env.MAX_ACTIVE_STUDENT_DEVICES = '2';
+    try {
+      const email = `multi-${randomUUID()}@freshman.test`;
+      const first = request.agent(app.getHttpServer()),
+        second = request.agent(app.getHttpServer()),
+        third = request.agent(app.getHttpServer());
+      await call(first, 'post', '/auth/register')
+        .send({
+          email,
+          password,
+          name: 'Two-installation learner',
+          installation_id: randomUUID(),
+        })
+        .expect(201);
+      await call(second, 'post', '/auth/login')
+        .send({ email, password, installation_id: randomUUID() })
+        .expect(200);
+      await call(first, 'get', '/auth/me').expect(200);
+      const a = await call(first, 'get', '/devices/me').expect(200),
+        b = await call(second, 'get', '/devices/me').expect(200);
+      expect(a.body.id).not.toBe(b.body.id);
+      await call(third, 'post', '/auth/login')
+        .send({ email, password, installation_id: randomUUID() })
+        .expect(409);
+    } finally {
+      process.env.MAX_ACTIVE_STUDENT_DEVICES = '1';
+    }
   });
 });

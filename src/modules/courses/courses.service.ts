@@ -1,3 +1,4 @@
+import { audit } from '../audit/audit.js';
 import {
   ForbiddenException,
   Injectable,
@@ -32,18 +33,36 @@ export class CoursesService {
       },
       include: {
         instructor: { select: { name: true } },
-        _count: { select: { lessons: true } },
+        lessons: { select: { chapter: true, kind: true, preview: true } },
+        _count: {
+          select: {
+            lessons: true,
+            assessments: { where: { published: true } },
+            enrollments: {
+              where: { status: 'ACTIVE', entitlement: { state: 'ACTIVE' } },
+            },
+          },
+        },
         thumbnail: { select: { course_id: true } },
       },
       orderBy: { created_at: 'desc' },
       take: 100,
     });
-    return rows.map(({ instructor, _count, thumbnail, ...course }) => ({
-      ...course,
-      instructor_name: instructor.name,
-      lesson_count: _count.lessons,
-      has_thumbnail: !!thumbnail,
-    }));
+    return rows.map(
+      ({ instructor, _count, thumbnail, lessons, ...course }) => ({
+        ...course,
+        instructor_name: instructor.name,
+        lesson_count: _count.lessons,
+        chapter_count: new Set(
+          lessons.map((lesson) => lesson.chapter?.trim() || 'Getting started'),
+        ).size,
+        assessment_count: _count.assessments,
+        enrollment_count: _count.enrollments,
+        preview_count: lessons.filter((lesson) => lesson.preview).length,
+        quiz_count: lessons.filter((lesson) => lesson.kind === 'QUIZ').length,
+        has_thumbnail: !!thumbnail,
+      }),
+    );
   }
   async details(id: string) {
     const row = await this.db.course.findFirst({
@@ -103,6 +122,7 @@ export class CoursesService {
         ? {}
         : { instructor_id: user.id },
       include: {
+        instructor: { select: { name: true } },
         _count: {
           select: {
             lessons: true,
@@ -115,10 +135,74 @@ export class CoursesService {
       },
       orderBy: { created_at: 'desc' },
     });
-    return rows.map(({ thumbnail, ...course }) => ({
+    return rows.map(({ thumbnail, instructor, ...course }) => ({
       ...course,
       has_thumbnail: !!thumbnail,
+      instructor_name: instructor.name,
     }));
+  }
+  async transfer(
+    user: CurrentUser,
+    id: string,
+    ownerId: string,
+    reason: string,
+  ) {
+    if (user.role !== 'SUPER_ADMIN')
+      throw new ForbiddenException('Only Super Admin can transfer ownership');
+    return this.db.atomic(async (tx) => {
+      const course = await tx.course.findUniqueOrThrow({ where: { id } });
+      const instructor = await tx.user.findFirst({
+        where: {
+          id: ownerId,
+          role: 'INSTRUCTOR',
+          active: true,
+          suspended: false,
+        },
+      });
+      if (!instructor)
+        throw new ForbiddenException('Select an active instructor');
+      await tx.course.update({
+        where: { id },
+        data: { instructor_id: ownerId },
+      });
+      await audit(tx, {
+        actor: user,
+        target: ownerId,
+        action: 'COURSE_OWNER_TRANSFERRED',
+        description: 'Course ownership transferred.',
+        reason,
+        resourceType: 'COURSE',
+        resourceId: id,
+        oldValues: { instructor_id: course.instructor_id },
+        newValues: { instructor_id: ownerId },
+      });
+      return { transferred: true };
+    });
+  }
+  async managedDetails(user: CurrentUser, id: string) {
+    await this.assertOwner(user, id);
+    const row = await this.db.course.findUniqueOrThrow({
+      where: { id },
+      include: {
+        instructor: { select: { name: true } },
+        thumbnail: { select: { course_id: true } },
+        _count: {
+          select: {
+            lessons: true,
+            assessments: true,
+            enrollments: {
+              where: { status: 'ACTIVE', entitlement: { state: 'ACTIVE' } },
+            },
+          },
+        },
+      },
+    });
+    const { thumbnail, instructor, ...course } = row;
+    return {
+      ...course,
+      has_thumbnail: !!thumbnail,
+      instructor_name: instructor.name,
+    };
   }
   async publicThumbnail(id: string) {
     const image = await this.db.courseThumbnail.findFirst({
@@ -161,8 +245,14 @@ export class CoursesService {
     await this.db.courseThumbnail.deleteMany({ where: { course_id: id } });
     return { message: 'Thumbnail removed' };
   }
-  async assertOwner(user: CurrentUser, id: string) {
-    const course = await this.db.course.findUnique({ where: { id } });
+  async assertOwner(
+    user: CurrentUser,
+    id: string,
+    client?: Prisma.TransactionClient,
+  ) {
+    const course = await (client ?? this.db).course.findUnique({
+      where: { id },
+    });
     if (!course) throw new NotFoundException('Course not found');
     if (
       !['ADMIN', 'SUPER_ADMIN'].includes(user.role) &&
@@ -224,7 +314,17 @@ export class CoursesService {
   async update(user: CurrentUser, id: string, dto: CourseDto) {
     await this.assertOwner(user, id);
     return this.db.atomic(async (tx) => {
+      const previous = await this.assertOwner(user, id, tx);
       const updated = await tx.course.update({ where: { id }, data: dto });
+      if (previous.published !== updated.published)
+        await audit(tx, {
+          actor: user,
+          target: previous.instructor_id,
+          action: updated.published ? 'COURSE_PUBLISHED' : 'COURSE_UNPUBLISHED',
+          description: `Course ${updated.published ? 'published' : 'unpublished'}: ${updated.title}`,
+          resourceType: 'COURSE',
+          resourceId: id,
+        });
       await notifyCourse(tx, id, {
         event_key: `course:${id}:${updated.updated_at.toISOString()}`,
         kind: 'COURSE',

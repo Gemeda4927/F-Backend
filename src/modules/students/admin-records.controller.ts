@@ -1,3 +1,4 @@
+import { activeDeviceLimit } from '../devices/device-policy.js';
 import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permissions } from '../../common/decorators/permissions.js';
@@ -8,12 +9,12 @@ export class AdminRecordsController {
   constructor(private readonly db: PrismaService) {}
   @Get('revenue') @ApiOperation({ summary: 'Aggregate verified revenue separately by currency' })
   async revenue() {
-    const rows = await this.db.payment.groupBy({ by: ['currency', 'status'], _sum: { amount_minor: true }, _count: true, orderBy: { currency: 'asc' } });
+    const rows = await this.db.payment.groupBy({ by: ['currency', 'status'], where: { mode: 'live' }, _sum: { amount_minor: true }, _count: true, orderBy: { currency: 'asc' } });
     return rows.map(r => ({ currency: r.currency, status: r.status, amount_minor: r._sum.amount_minor ?? 0, count: r._count }));
   }
   @Get('settings') @ApiOperation({ summary: 'Inspect safe, effective runtime policies; excludes all credentials' })
   settings() {
-    return { authentication: 'HTTP-only cookie sessions', registered_browser_limit: 1,
+    return { authentication: 'HTTP-only cookie sessions', registered_browser_limit: activeDeviceLimit(), firebase_push_enabled: process.env.FIREBASE_PUSH_ENABLED === 'true',
       access_token_lifetime_minutes: 15, session_lifetime_days: 30,
       secure_cookies: process.env.COOKIE_SECURE === 'true',
       payment_mode: process.env.CHAPA_MODE ?? 'test',
@@ -35,9 +36,10 @@ export class AdminRecordsController {
         created_at: r.created_at })), total, page: q.page, pageSize: q.pageSize };
     }
     if (kind === 'devices') {
+      const where = { user: { OR: [{ name: { contains: q.search, mode: 'insensitive' as const } }, { email: { contains: q.search, mode: 'insensitive' as const } }] } };
       const [rows, total] = await this.db.$transaction([
-        this.db.studentDevice.findMany({ ...paging, orderBy: [{ registered_at: 'desc' }, { id: 'asc' }], select: { id: true, user_id: true, label: true, registered_at: true, last_seen_at: true, revoked_at: true, user: { select: { name: true } } } }),
-        this.db.studentDevice.count(),
+        this.db.studentDevice.findMany({ where, ...paging, orderBy: [{ registered_at: 'desc' }, { id: 'asc' }], select: { id: true, user_id: true, label: true, registered_at: true, last_seen_at: true, revoked_at: true, user: { select: { name: true } } } }),
+        this.db.studentDevice.count({ where }),
       ]);
       return { items: rows.map(r => ({ id: r.id, student_id: r.user_id, student_name: r.user.name, title: r.label, status: r.revoked_at ? 'REVOKED' : 'REGISTERED', detail: `Last seen: ${r.last_seen_at.toISOString()}`, created_at: r.registered_at })), total, page: q.page, pageSize: q.pageSize };
     }

@@ -1,3 +1,4 @@
+import { notify } from '../notifications/notifications.js';
 import {
   BadGatewayException,
   ConflictException,
@@ -11,7 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { CurrentUser } from '../../common/types.js';
 import { audit } from '../audit/audit.js';
-import { ChapaGateway, minorUnits } from './chapa.gateway.js';
+import { ChapaGateway, minorUnits, chapaDescription } from './chapa.gateway.js';
 import type { CreatePaymentDto } from './payments.dto.js';
 export function validWebhook(
   raw: Buffer,
@@ -106,6 +107,7 @@ export class PaymentsService {
           user_id: user.id,
           course_id: course.id,
           tx_ref: 'freshman-' + randomUUID(),
+          mode: process.env.CHAPA_MODE ?? 'test',
           amount_minor: course.price_minor,
           currency: course.currency,
           idempotency_key: dto.idempotency_key,
@@ -115,7 +117,7 @@ export class PaymentsService {
     });
     if (!claim.isNew) return claim.payment;
     // Never put a provider call inside a retryable database transaction.
-    const [first, ...last] = user.name.split(' ');
+    const [first, ...last] = user.name.trim().split(/\s+/);
     const data = await this.gateway.initialize({
       amount: (claim.payment.amount_minor / 100).toFixed(2),
       currency: claim.payment.currency,
@@ -133,8 +135,11 @@ export class PaymentsService {
         claim.payment.tx_ref,
       customization: {
         title: 'Learnova course',
-        description: claim.course.title.slice(0, 50),
+        description: chapaDescription(claim.course.title),
       },
+    }).catch(async (error: unknown) => {
+      await this.db.payment.updateMany({ where: { id: claim.payment.id, status: 'PENDING' }, data: { status: 'FAILED' } });
+      throw error;
     });
     const checkout = new URL(String(data.checkout_url));
     if (
@@ -170,7 +175,9 @@ export class PaymentsService {
     if (!payment) throw new NotFoundException('Payment not found');
     if (payment.refund) await this.verifyRefund(payment.id);
     if (payment.status === 'PENDING') await this.verify(reference);
-    return this.db.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    const result = await this.db.payment.findUniqueOrThrow({ where: { id: payment.id }, include: { course: { select: { title: true } } } });
+    const { course, ...safe } = result;
+    return { ...safe, course_title: course.title };
   }
   async verify(reference: string) {
     const payment = await this.db.payment.findUnique({
@@ -189,13 +196,13 @@ export class PaymentsService {
       minorUnits(data.amount) !== payment.amount_minor ||
       data.currency !== payment.currency ||
       String(data.email).toLowerCase() !== payment.user.email ||
-      (data.mode && data.mode !== (process.env.CHAPA_MODE ?? 'test'))
+      (data.mode && data.mode !== (payment.mode === 'unknown' ? (process.env.CHAPA_MODE ?? 'test') : payment.mode))
     )
       throw new BadGatewayException(
         'Payment verification did not match the order',
       );
     const status = String(data.status).toLowerCase();
-    if (!['success', 'failed', 'refunded'].includes(status))
+    if (!['success', 'failed', 'cancelled', 'canceled', 'refunded'].includes(status))
       return { received: true };
     await this.db.atomic(async (tx) => {
       const current = await tx.payment.findUniqueOrThrow({
@@ -214,8 +221,9 @@ export class PaymentsService {
           throw new BadGatewayException('Gateway reference missing');
         await tx.payment.update({
           where: { id: current.id },
-          data: { status: 'SUCCEEDED', provider_ref: providerRef },
+          data: { status: 'SUCCEEDED', provider_ref: providerRef, verified_at: new Date() },
         });
+        await notify(tx, [current.user_id], { event_key: `payment:${current.id}:verified`, kind: 'PAYMENT', title: 'Payment verified', message: `Your payment for ${payment.course.title} was verified.`, href: `/payments?reference=${current.tx_ref}` });
         const previousEnrollment = await tx.enrollment.findUnique({
           where: {
             user_id_course_id: {
