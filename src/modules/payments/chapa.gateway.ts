@@ -5,6 +5,26 @@ import {
   UnprocessableEntityException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+// Return fixed labels only; never log arbitrary provider text or reflected values.
+export function chapaFailureReason(message: unknown): string {
+  if (typeof message !== 'string') return 'UNCLASSIFIED';
+  if (/invalid api key|authorization required|unauthori[sz]ed/i.test(message))
+    return 'AUTHENTICATION_REJECTED';
+  if (
+    /can.t receive payments|cannot receive payments|api is disabled|payments through api.*disabled/i.test(
+      message,
+    )
+  )
+    return 'MERCHANT_PAYMENTS_DISABLED';
+  if (/currency.*not supported|invalid currency/i.test(message))
+    return 'CURRENCY_UNSUPPORTED';
+  if (/reference.*used before|reference.*already.*used/i.test(message))
+    return 'REFERENCE_ALREADY_USED';
+  if (/share.*not enough.*fee|fee.*greater.*amount/i.test(message))
+    return 'MERCHANT_FEE_CONFIGURATION';
+  if (/incorrect header|content-type/i.test(message)) return 'HEADERS_REJECTED';
+  return 'UNCLASSIFIED';
+}
 // Chapa v1 rejects punctuation outside this character set, even in course titles.
 export function chapaDescription(title: string): string {
   return (
@@ -78,19 +98,37 @@ export class ChapaGateway {
               ].includes(field),
             )
           : [];
+      const reason = chapaFailureReason(result?.message);
       this.logger.warn(
         JSON.stringify({
           provider: 'chapa',
           api: 'v1',
           status: response.status,
           fields,
+          reason,
+          responseFormat: result === null ? 'non-json' : typeof result.message,
         }),
       );
       if ([400, 422].includes(response.status) && fields.includes('email'))
         throw new UnprocessableEntityException(
           'Chapa rejected your account email. Use a valid email address that can receive mail; demo .example addresses cannot be used for checkout.',
         );
-      if ([401, 403].includes(response.status))
+      if (reason === 'MERCHANT_PAYMENTS_DISABLED')
+        throw new ServiceUnavailableException(
+          'The Chapa merchant account cannot receive API payments. Contact support.',
+        );
+      if (reason === 'CURRENCY_UNSUPPORTED')
+        throw new UnprocessableEntityException(
+          'Chapa does not support this course currency. Contact support.',
+        );
+      if (reason === 'REFERENCE_ALREADY_USED')
+        throw new BadGatewayException(
+          'This payment reference already exists at Chapa. Check Payments before retrying.',
+        );
+      if (
+        [401, 403].includes(response.status) ||
+        reason === 'AUTHENTICATION_REJECTED'
+      )
         throw new ServiceUnavailableException(
           'Payment configuration could not be authenticated. Contact support.',
         );

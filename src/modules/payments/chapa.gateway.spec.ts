@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChapaGateway, chapaDescription } from './chapa.gateway.js';
+import {
+  ChapaGateway,
+  chapaDescription,
+  chapaFailureReason,
+} from './chapa.gateway.js';
 describe('Chapa provider errors', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -48,4 +52,26 @@ it('formats course titles for the Chapa v1 description constraint', () => {
   );
   expect(chapaDescription('###')).toBe('Course enrollment');
   expect(chapaDescription('a'.repeat(80))).toHaveLength(50);
+});
+
+describe('safe Chapa message classification', () => {
+  it.each([
+    ['Invalid API Key or User does not exist', 'AUTHENTICATION_REJECTED'],
+    ['User can?t receive payments', 'MERCHANT_PAYMENTS_DISABLED'],
+    [
+      'Payments through API is disabled, please contact us',
+      'MERCHANT_PAYMENTS_DISABLED',
+    ],
+    ['Invalid currency, currency is not supported', 'CURRENCY_UNSUPPORTED'],
+    ['Transaction reference has been used before', 'REFERENCE_ALREADY_USED'],
+    ['private@example.com CHASECK_TEST-private-data', 'UNCLASSIFIED'],
+    [{ email: ['private@example.com'] }, 'UNCLASSIFIED'],
+  ])('returns a fixed safe reason', (message, reason) => {
+    expect(chapaFailureReason(message)).toBe(reason);
+  });
+  it('never returns raw provider text', () => {
+    expect(chapaFailureReason('Invalid API Key CHASECK_TEST-private')).toBe(
+      'AUTHENTICATION_REJECTED',
+    );
+  });
 });
