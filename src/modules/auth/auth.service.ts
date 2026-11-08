@@ -1,4 +1,3 @@
-import { activeDeviceLimit } from '../devices/device-policy.js';
 import {
   BadRequestException,
   ConflictException,
@@ -129,16 +128,6 @@ export class AuthService {
         const existing = active.find(
           (device) => device.token_hash === presentedTokenHash,
         );
-        if (
-          (!existing && active.length >= activeDeviceLimit()) ||
-          (existing &&
-            installationHash &&
-            existing.installation_hash &&
-            installationHash !== existing.installation_hash)
-        )
-          throw new ConflictException(
-            'DEVICE_REGISTERED: The authorized installation limit has been reached or this registration changed. Use verified account recovery or ask an administrator for a device reset.',
-          );
         if (existing) {
           deviceId = existing.id;
           await tx.studentDevice.update({

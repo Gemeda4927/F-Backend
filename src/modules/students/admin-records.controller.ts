@@ -1,4 +1,3 @@
-import { activeDeviceLimit } from '../devices/device-policy.js';
 import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permissions } from '../../common/decorators/permissions.js';
@@ -14,7 +13,7 @@ export class AdminRecordsController {
   }
   @Get('settings') @ApiOperation({ summary: 'Inspect safe, effective runtime policies; excludes all credentials' })
   settings() {
-    return { authentication: 'HTTP-only cookie sessions', registered_browser_limit: activeDeviceLimit(), firebase_push_enabled: process.env.FIREBASE_PUSH_ENABLED === 'true',
+    return { authentication: 'HTTP-only cookie sessions', registered_browser_limit: null, firebase_push_enabled: process.env.FIREBASE_PUSH_ENABLED === 'true',
       access_token_lifetime_minutes: 15, session_lifetime_days: 30,
       secure_cookies: process.env.COOKIE_SECURE === 'true',
       payment_mode: process.env.CHAPA_MODE ?? 'test',

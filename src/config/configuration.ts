@@ -1,4 +1,3 @@
-import { activeDeviceLimit } from '../modules/devices/device-policy.js';
 export function getConfiguration() {
   const port = Number(process.env.PORT ?? 5000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -30,7 +29,6 @@ export function getConfiguration() {
 }
 
 export function validatePlatformEnvironment() {
-  activeDeviceLimit();
   for (const name of [
     'DATABASE_URL',
     'JWT_ACCESS_SECRET',

@@ -201,23 +201,23 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       expect(typeof r.body.metrics.courses).toBe('number');
     }
   });
-  it('blocks a second registered client and keeps registration after logout', async () => {
+  it('allows a new client and sign-in after logout', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')
       .set('Origin', origin)
       .send({ email: 'student@freshman.test', password })
-      .expect(409);
+      .expect(200);
     await call(agents.STUDENT, 'post', '/auth/logout').expect(200);
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')
       .set('Origin', origin)
       .send({ email: 'student@freshman.test', password })
-      .expect(409);
+      .expect(200);
     await call(agents.STUDENT, 'post', '/auth/login')
       .send({ email: 'student@freshman.test', password })
       .expect(200);
   });
-  it('atomically allows only one simultaneous first-device login', async () => {
+  it('allows simultaneous password-authenticated logins on separate browsers', async () => {
     await db.user.create({
       data: {
         id: randomUUID(),
@@ -234,7 +234,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         .send({ email: 'race@freshman.test', password });
     const results = await Promise.all([login(), login()]);
     expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([
-      200, 409,
+      200, 200,
     ]);
     expect(
       [
@@ -244,7 +244,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
           }),
         },
       ][0].count,
-    ).toBe(1);
+    ).toBe(2);
   });
   it('rotates refresh sessions and rejects replayed refresh tokens', async () => {
     const agent = request.agent(app.getHttpServer());
@@ -2240,7 +2240,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       )?.amount_minor ?? 0,
     ).toBe(expected._sum.amount_minor ?? 0);
   });
-  it('honors the configurable installation limit without revoking another authorized installation', async () => {
+  it('allows additional browsers without revoking existing authenticated sessions', async () => {
     process.env.MAX_ACTIVE_STUDENT_DEVICES = '2';
     try {
       const email = `multi-${randomUUID()}@freshman.test`;
@@ -2264,7 +2264,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       expect(a.body.id).not.toBe(b.body.id);
       await call(third, 'post', '/auth/login')
         .send({ email, password, installation_id: randomUUID() })
-        .expect(409);
+        .expect(200);
     } finally {
       process.env.MAX_ACTIVE_STUDENT_DEVICES = '1';
     }
