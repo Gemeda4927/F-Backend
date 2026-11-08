@@ -2269,4 +2269,34 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       process.env.MAX_ACTIVE_STUDENT_DEVICES = '1';
     }
   });
+  it('converts a student to instructor and back without losing learning or owned course records', async () => {
+    const id=randomUUID(), email=`role-cycle-${id}@freshman.test`;
+    await db.user.create({data:{id,email,name:'Role cycle learner',password_hash:await bcrypt.hash(password,4),role:'STUDENT',role_id:'STUDENT'}});
+    const purchase=await db.payment.create({data:{user_id:id,course_id:courseId,tx_ref:'role-cycle-'+id,amount_minor:12500,currency:'ETB',idempotency_key:randomUUID(),status:'SUCCEEDED',mode:'test'}});
+    const enrollment=await db.enrollment.create({data:{user_id:id,course_id:courseId,payment_id:purchase.id}});
+    await db.learningProgress.create({data:{user_id:id,lesson_id:lessonId}});
+    const student=request.agent(app.getHttpServer());
+    await call(student,'post','/auth/login').send({email,password}).expect(200);
+    await call(agents.ADMIN,'patch',`/users/${id}`).send({role:'INSTRUCTOR'}).expect(403);
+    await call(student,'patch',`/users/${id}`).send({role:'INSTRUCTOR'}).expect(403);
+    const promoted=await call(agents.SUPER_ADMIN,'patch',`/users/${id}`).send({role:'INSTRUCTOR'}).expect(200);
+    expect(promoted.body.role).toBe('INSTRUCTOR');
+    await call(student,'get','/auth/me').expect(401);
+    const instructor=request.agent(app.getHttpServer());
+    await call(instructor,'post','/auth/login').send({email,password}).expect(200);
+    const owned=await call(instructor,'post','/courses').send({title:'Retained instructor course',description:'Course preserved when the instructor returns to learning.',category:'General',price_minor:0,currency:'ETB',published:false,visibility:'PRIVATE'}).expect(201);
+    await call(agents.SUPER_ADMIN,'patch',`/users/${id}`).send({role:'STUDENT'}).expect(200);
+    await call(instructor,'get','/auth/me').expect(401);
+    const returned=await db.user.findUniqueOrThrow({where:{id}});
+    expect(returned.role).toBe('STUDENT'); expect(returned.role_id).toBe('STUDENT');
+    expect(await db.enrollment.count({where:{id:enrollment.id,user_id:id,payment_id:purchase.id}})).toBe(1);
+    expect((await db.payment.findUniqueOrThrow({where:{id:purchase.id}})).status).toBe('SUCCEEDED');
+    expect(await db.learningProgress.count({where:{user_id:id,lesson_id:lessonId}})).toBe(1);
+    expect((await db.course.findUniqueOrThrow({where:{id:owned.body.id}})).instructor_id).toBe(id);
+    const again=request.agent(app.getHttpServer());
+    await call(again,'post','/auth/login').send({email,password}).expect(200);
+    await call(again,'patch',`/courses/${owned.body.id}`).send({title:'Not allowed'}).expect(403);
+    expect(await db.auditLog.count({where:{target_id:id,action:'ROLE_CHANGED'}})).toBe(2);
+  });
+
 });
