@@ -307,9 +307,9 @@ Course thumbnails are stored in PostgreSQL, limited to 2 MB, and accepted as PNG
 
 ## Environment and deployment
 
-On Render, use `npm ci && npm run build` as the build command and `npm start` as the start command. `npm start` runs the compiled `dist/main.js` directly; it does not invoke the Nest CLI or compile TypeScript on the running instance. Use `npm run start:dev` for local development. Apply database migrations with `npm run db:deploy` before starting a release that changes the schema.
+On Render, use `npm ci --include=dev && npm run build` as the build command and `npm start` as the start command. `npm start` runs the compiled `dist/main.js` directly; it does not invoke the Nest CLI or compile TypeScript on the running instance. Use `npm run start:dev` for local development. Apply database migrations with `npm run db:deploy` before starting a release that changes the schema.
 
-Copy `.env.example` to `.env` without overwriting an existing file. Configure DATABASE_URL, DIRECT_URL if required, FRONTEND_URL, CORS_ORIGINS, PORT, independent JWT secrets, cookie settings, and any Chapa and SMTP settings used by the deployment. Never commit credentials. Apply reviewed migrations with `npm run db:deploy`, generate the client with `npm run prisma:generate`, and run `npm run build` followed by `npm run start:prod`. The Swagger UI is available at `/api/docs` when the server is running.
+Create `.env` for local development without overwriting an existing file; on Render, configure variables in the service Environment settings. Configure DATABASE_URL, DIRECT_URL if required, FRONTEND_URL, CORS_ORIGINS, PORT, independent JWT secrets, cookie settings, and any Chapa and SMTP settings used by the deployment. Never commit credentials. Apply reviewed migrations with `npm run db:deploy`, generate the client with `npm run prisma:generate`, and run `npm run build` followed by `npm run start:prod`. The Swagger UI is available at `/api/docs` when the server is running.
 
 ## Troubleshooting
 
@@ -348,3 +348,5 @@ Course management uses verified-token ownership; clients never choose an owner d
 
 
 Device change requests reuse the audit ledger (`DEVICE_CHANGE_REQUESTED`) rather than a duplicate device model. Current authorized students can post a reason; requests are idempotent until reset/recovery. Super Admin reviews pending requests from Device Management and verifies identity before the existing reset workflow. Request submission never authorizes a replacement device. Dashboard analytics additionally include recorded publication events, current active enrollment ranking, instructor publication activity, pricing mix, and live-only daily revenue separated by currency. Historical publication timestamps are not invented.
+
+The project `.npmrc` explicitly includes development dependencies during installation, including when `NODE_ENV=production`. Nest CLI, TypeScript, type declarations and Prisma are required during the build. Production startup continues to run compiled JavaScript with `npm start`. Do not change NODE_ENV to development to work around missing build tools.
