@@ -1,6 +1,10 @@
 import {
   Body,
+  CallHandler,
   Controller,
+  ExecutionContext,
+  Injectable,
+  type NestInterceptor,
   Get,
   Module,
   Param,
@@ -30,6 +34,39 @@ import { CoursesModule } from '../courses/courses.module.js';
 import { CoursesService } from '../courses/courses.service.js';
 import { LessonDto, QuizSubmissionDto } from './lessons.dto.js';
 import { LessonsService } from './lessons.service.js';
+import { removePrivateFile } from './storage.js';
+import type { AuthRequest } from '../../common/types.js';
+
+/**
+ * Runs before Multer writes anything to disk: only the course owner (or an admin)
+ * may stream a file into a PDF/VIDEO topic.
+ */
+@Injectable()
+class LessonUploadGuard implements NestInterceptor {
+  constructor(
+    private readonly db: PrismaService,
+    private readonly courses: CoursesService,
+  ) {}
+  async intercept(context: ExecutionContext, next: CallHandler) {
+    const req = context.switchToHttp().getRequest<AuthRequest>();
+    const id = String(req.params.id ?? '');
+    const lesson = /^[0-9a-f-]{36}$/i.test(id)
+      ? await this.db.lesson.findUnique({
+          where: { id },
+          select: { course_id: true, kind: true, draft: true },
+        })
+      : null;
+    if (!lesson) throw new NotFoundException('Topic not found');
+    await this.courses.assertOwner(req.user, lesson.course_id);
+    const kind =
+      (lesson.draft as { kind?: string } | null)?.kind ?? lesson.kind;
+    if (!['PDF', 'VIDEO'].includes(kind))
+      throw new BadRequestException(
+        'Only PDF and video topics accept uploaded material',
+      );
+    return next.handle();
+  }
+}
 @Controller('lessons')
 class LessonsController {
   constructor(
@@ -61,9 +98,20 @@ class LessonsController {
         content: true,
         quiz: true,
         practice: true,
+        chapter_id: true,
+        status: true,
+        draft: true,
+        revision: true,
+        storage_path: true,
       },
       orderBy: { position: 'asc' },
-    });
+    }).then((rows) =>
+      rows.map(({ storage_path, draft, ...row }) => ({
+        ...row,
+        has_file: !!storage_path,
+        has_draft: !!draft,
+      })),
+    );
   }
   @Get('course/:id/progress') progress(
     @User() u: CurrentUser,
@@ -108,6 +156,7 @@ class LessonsController {
   @Permissions('courses:write')
   @Post(':id/asset')
   @UseInterceptors(
+    LessonUploadGuard,
     FileInterceptor('file', {
       storage: diskStorage({
         destination: (_req, _file, cb) => {
@@ -151,16 +200,20 @@ class LessonsController {
       const lesson = await this.db.lesson.findUnique({ where: { id } });
       if (!lesson) throw new NotFoundException();
       await this.courses.assertOwner(u, lesson.course_id);
+      const kind =
+        (lesson.draft as { kind?: string } | null)?.kind ?? lesson.kind;
       if (
-        (lesson.kind === 'PDF' && file.mimetype !== 'application/pdf') ||
-        (lesson.kind === 'VIDEO' && !file.mimetype.startsWith('video/')) ||
-        !['PDF', 'VIDEO'].includes(lesson.kind)
+        (kind === 'PDF' && file.mimetype !== 'application/pdf') ||
+        (kind === 'VIDEO' && !file.mimetype.startsWith('video/')) ||
+        !['PDF', 'VIDEO'].includes(kind)
       )
         throw new BadRequestException('File type must match the lesson');
       await this.db.lesson.update({
         where: { id },
         data: { storage_path: file.filename },
       });
+      if (lesson.storage_path && lesson.storage_path !== file.filename)
+        removePrivateFile(lesson.storage_path);
       return { message: 'Protected material uploaded' };
     } catch (error) {
       unlinkSync(file.path);

@@ -26,10 +26,10 @@ export class AdminRecordsController {
     const paging = { skip: (q.page - 1) * q.pageSize, take: q.pageSize };
     if (kind === 'enrollments' || kind === 'progress') {
       const [rows, total] = await this.db.$transaction([
-        this.db.enrollment.findMany({ ...paging, orderBy: [{ created_at: 'desc' }, { id: 'asc' }], select: { id: true, user_id: true, status: true, created_at: true, entitlement: { select: { state: true } }, user: { select: { name: true } }, course: { select: { id: true, title: true, _count: { select: { lessons: true } } } } } }),
+        this.db.enrollment.findMany({ ...paging, orderBy: [{ created_at: 'desc' }, { id: 'asc' }], select: { id: true, user_id: true, status: true, created_at: true, entitlement: { select: { state: true } }, user: { select: { name: true } }, course: { select: { id: true, title: true, _count: { select: { lessons: { where: { status: 'PUBLISHED' } } } } } } } }),
         this.db.enrollment.count(),
       ]);
-      const completed = kind === 'progress' ? await this.db.learningProgress.findMany({ where: { OR: rows.map(r => ({ user_id: r.user_id, lesson: { course_id: r.course.id } })) }, select: { user_id: true, lesson: { select: { course_id: true } } } }) : [];
+      const completed = kind === 'progress' ? await this.db.learningProgress.findMany({ where: { OR: rows.map(r => ({ user_id: r.user_id, lesson: { course_id: r.course.id, status: 'PUBLISHED' as const } })) }, select: { user_id: true, lesson: { select: { course_id: true } } } }) : [];
       return { items: rows.map(r => ({ id: r.id, student_id: r.user_id, student_name: r.user.name, title: r.course.title, status: r.status,
         detail: kind === 'progress' ? `${completed.filter(p => p.user_id === r.user_id && p.lesson.course_id === r.course.id).length} / ${r.course._count.lessons} lessons completed` : `Entitlement: ${r.entitlement?.state ?? 'NONE'}`,
         created_at: r.created_at })), total, page: q.page, pageSize: q.pageSize };

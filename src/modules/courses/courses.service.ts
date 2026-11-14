@@ -33,10 +33,13 @@ export class CoursesService {
       },
       include: {
         instructor: { select: { name: true } },
-        lessons: { select: { chapter: true, kind: true, preview: true } },
+        lessons: {
+          where: { status: 'PUBLISHED' },
+          select: { chapter: true, kind: true, preview: true },
+        },
         _count: {
           select: {
-            lessons: true,
+            lessons: { where: { status: 'PUBLISHED' } },
             assessments: { where: { published: true } },
             enrollments: {
               where: { status: 'ACTIVE', entitlement: { state: 'ACTIVE' } },
@@ -71,6 +74,7 @@ export class CoursesService {
         instructor: { select: { name: true } },
         thumbnail: { select: { course_id: true } },
         lessons: {
+          where: { status: 'PUBLISHED' },
           select: {
             id: true,
             title: true,
@@ -100,6 +104,7 @@ export class CoursesService {
       include: {
         instructor: { select: { name: true } },
         lessons: {
+          where: { status: 'PUBLISHED' },
           select: {
             id: true,
             title: true,
@@ -305,7 +310,7 @@ export class CoursesService {
         category: dto.category,
         price_minor: dto.price_minor,
         currency: dto.currency,
-        published: dto.published,
+        published: dto.published ?? false,
         visibility: dto.visibility ?? 'PRIVATE',
         instructor_id: user.id,
       },
@@ -326,7 +331,8 @@ export class CoursesService {
           resourceId: id,
         });
       await notifyCourse(tx, id, {
-        event_key: `course:${id}:${updated.updated_at.toISOString()}`,
+        // At most one "course updated" notice per day.
+        event_key: `course:${id}:${updated.updated_at.toISOString().slice(0, 10)}`,
         kind: 'COURSE',
         title: `Course updated: ${updated.title}`,
         message: 'Your instructor updated the course information.',

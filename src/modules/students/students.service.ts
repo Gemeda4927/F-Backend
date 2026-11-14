@@ -80,7 +80,7 @@ export class StudentsService {
       this.db.enrollment.findMany({ where, ...paging(q), orderBy: [{ created_at: 'desc' }, { id: 'asc' }], select: {
         id: true, course_id: true, created_at: true, status: true, payment_id: true,
         entitlement: { select: { state: true } }, payment: { select: { status: true } },
-        course: { select: { title: true, published: true, instructor: { select: { name: true } }, _count: { select: { lessons: true } }, lessons: { select: { _count: { select: { progress: { where: { user_id: id } } } } } } } },
+        course: { select: { title: true, published: true, instructor: { select: { name: true } }, _count: { select: { lessons: { where: { status: 'PUBLISHED' } } } }, lessons: { where: { status: 'PUBLISHED' }, select: { _count: { select: { progress: { where: { user_id: id } } } } } } } },
       } }), this.db.enrollment.count({ where }),
     ]);
     return envelope(rows.map(({ course, ...r }) => {

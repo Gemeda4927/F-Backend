@@ -35,7 +35,10 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { audit } from '../audit/audit.js';
 import { Permissions, User } from '../../common/decorators/permissions.js';
 import type { CurrentUser } from '../../common/types.js';
 import type { Assessment, Prisma } from '../../generated/prisma/client.js';
@@ -52,6 +55,7 @@ import {
   type Question,
   type Responses,
   type Grade,
+  applyWordingCorrections,
 } from './questions.js';
 import { notify, notifyCourse } from '../notifications/notifications.js';
 
@@ -86,6 +90,33 @@ class AssessmentDto {
   @IsOptional() @IsInt() @Min(1) @Max(10) max_attempts?: number;
   @IsOptional() @IsBoolean() results_published?: boolean;
   @IsOptional() @IsBoolean() allow_files?: boolean;
+}
+class OptionWordingDto {
+  @IsString() @MinLength(1) @MaxLength(80) id!: string;
+  @IsString() @MaxLength(2000) text!: string;
+}
+class QuestionWordingDto {
+  @IsString() @MinLength(1) @MaxLength(80) id!: string;
+  @IsOptional() @IsString() @MaxLength(10000) question?: string;
+  @IsOptional() @IsString() @MaxLength(10000) explanation?: string;
+  @IsOptional() @IsString() @MaxLength(10000) hint?: string;
+  @IsOptional() @IsString() @MaxLength(10000) image_alt?: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => OptionWordingDto)
+  options?: OptionWordingDto[];
+}
+class WordingCorrectionsDto {
+  @IsInt() @Min(1) expected_revision!: number;
+  @IsOptional() @IsString() @MinLength(3) @MaxLength(160) title?: string;
+  @IsOptional() @IsString() @MinLength(3) @MaxLength(20000) prompt?: string;
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => QuestionWordingDto)
+  questions!: QuestionWordingDto[];
 }
 class AnswerDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(50000) answer?: string;
@@ -302,6 +333,50 @@ export class AssessmentsController {
           message: 'A new exam is ready in your course.',
           href: `/learn/${updated.course_id}/activities/${id}?type=assessment`,
         });
+      return updated;
+    });
+  }
+  /** Typo and wording fixes for exams that already have attempts; grading data stays locked. */
+  @Permissions('courses:write') @Patch(':id/corrections') async corrections(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: WordingCorrectionsDto,
+  ) {
+    const a = await this.allowed(u, id);
+    await this.courses.assertOwner(u, a.course_id);
+    return this.db.atomic(async (tx) => {
+      const current = await tx.assessment.findUniqueOrThrow({ where: { id } });
+      if (dto.expected_revision !== current.revision)
+        throw new ConflictException(
+          'This exam changed in another editor; reload before saving',
+        );
+      const { bank, changed } = applyWordingCorrections(
+        current.question_bank as unknown as Question[],
+        dto.questions,
+      );
+      validateBank(bank, current.published);
+      const updated = await tx.assessment.update({
+        where: { id },
+        data: {
+          question_bank: bank as unknown as Prisma.InputJsonValue,
+          title: dto.title ?? current.title,
+          prompt: dto.prompt ?? current.prompt,
+          revision: { increment: 1 },
+        },
+      });
+      await audit(tx, {
+        actor: u,
+        target: u.id,
+        action: 'ASSESSMENT_WORDING_CORRECTED',
+        description: `Wording corrected in ${updated.title}`,
+        resourceType: 'ASSESSMENT',
+        resourceId: id,
+        metadata: {
+          questions: changed,
+          title_changed: updated.title !== current.title,
+          prompt_changed: updated.prompt !== current.prompt,
+        },
+      });
       return updated;
     });
   }

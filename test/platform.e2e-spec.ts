@@ -130,6 +130,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       db.enrollment.deleteMany(),
       db.payment.deleteMany(),
       db.lesson.deleteMany(),
+      db.chapter.deleteMany(),
       db.course.deleteMany(),
       db.passwordResetToken.deleteMany(),
       db.authSession.deleteMany(),
@@ -624,6 +625,101 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     ).toHaveLength(1);
   });
 
+  it('Course Studio: chapters, drafts, readiness, publishing and deletion', async () => {
+    const studio = (
+      method: 'get' | 'post' | 'patch' | 'put' | 'delete',
+      path: string,
+      agent = agents.INSTRUCTOR,
+    ) => agent[method]('/api/v1/studio' + path).set('Origin', origin);
+    const course = await call(agents.INSTRUCTOR, 'post', '/courses')
+      .send({
+        title: 'Studio workflow course',
+        description: 'A free course used to exercise the Course Studio authoring workflow end to end.',
+        category: 'Testing',
+        price_minor: 0,
+        currency: 'ETB',
+        visibility: 'PUBLIC',
+      })
+      .expect(201);
+    const id = course.body.id as string;
+    expect(course.body.published).toBe(false);
+    await studio('get', `/courses/${id}/curriculum`, agents.STUDENT).expect(403);
+    expect((await studio('get', `/courses/${id}/curriculum`).expect(200)).body.chapters).toEqual([]);
+    const basics = (await studio('post', `/courses/${id}/chapters`).send({ title: 'Basics' }).expect(201)).body.id;
+    const advanced = (await studio('post', `/courses/${id}/chapters`).send({ title: 'Advanced' }).expect(201)).body.id;
+    await studio('post', `/courses/${id}/chapters`).send({ title: 'Basics' }).expect(409);
+    const lesson = async (chapter: string, title: string, kind: string) =>
+      (await studio('post', `/courses/${id}/lessons`).send({ chapter_id: chapter, title, kind }).expect(201)).body.id as string;
+    const welcome = await lesson(basics, 'Welcome', 'TEXT');
+    const clip = await lesson(basics, 'Clip', 'VIDEO');
+    const check = await lesson(advanced, 'Check', 'QUIZ');
+
+    let ready = (await studio('get', `/courses/${id}/readiness`).expect(200)).body;
+    expect(ready.ready).toBe(false);
+    expect(ready.errors.map((e: { code: string }) => e.code).sort()).toEqual(['EMPTY_QUIZ', 'MISSING_FILE']);
+    await studio('post', `/courses/${id}/publish`).send({ published: true }).expect(409);
+
+    const draft = { title: 'Welcome', kind: 'TEXT', preview: true, practice: false, content: 'Welcome to the studio course. Read me first.' };
+    const saved = await studio('patch', `/lessons/${welcome}/draft`).send({ ...draft, expected_revision: 1 }).expect(200);
+    expect(saved.body.revision).toBe(2);
+    await studio('patch', `/lessons/${welcome}/draft`).send({ ...draft, expected_revision: 1 }).expect(409);
+    // Incomplete questions autosave fine but block publishing.
+    await studio('patch', `/lessons/${check}/draft`)
+      .send({ title: 'Check', kind: 'QUIZ', preview: false, practice: false, content: '', quiz: [{ question: '', options: ['', ''], correctIndex: 0 }], expected_revision: 1 })
+      .expect(200);
+    expect((await studio('get', `/courses/${id}/readiness`).expect(200)).body.errors.map((e: { code: string }) => e.code)).toContain('INVALID_QUIZ');
+    await studio('patch', `/lessons/${check}/draft`)
+      .send({ title: 'Check', kind: 'QUIZ', preview: false, practice: false, content: '', quiz: [{ question: 'Two plus two?', options: ['3', '4'], correctIndex: 1 }], expected_revision: 2 })
+      .expect(200);
+    expect((await studio('delete', `/lessons/${clip}`).expect(200)).body.deleted).toBe(true);
+    ready = (await studio('get', `/courses/${id}/readiness`).expect(200)).body;
+    expect(ready.errors).toEqual([]);
+
+    // Move the quiz to the top of Basics, leaving Advanced empty.
+    await studio('put', `/courses/${id}/curriculum`)
+      .send({ chapters: [{ id: basics, lesson_ids: [check, welcome] }, { id: advanced, lesson_ids: [] }] })
+      .expect(200);
+    await studio('put', `/courses/${id}/curriculum`)
+      .send({ chapters: [{ id: basics, lesson_ids: [check] }, { id: advanced, lesson_ids: [] }] })
+      .expect(409);
+    const rows = await db.lesson.findMany({ where: { course_id: id }, orderBy: { position: 'asc' } });
+    expect(rows.map((r) => [r.title, r.position, r.chapter])).toEqual([['Check', 0, 'Basics'], ['Welcome', 1, 'Basics']]);
+    await studio('patch', `/chapters/${basics}`).send({ title: 'Foundations' }).expect(200);
+    expect((await db.lesson.findMany({ where: { course_id: id } })).every((r) => r.chapter === 'Foundations')).toBe(true);
+
+    await studio('post', `/courses/${id}/publish`).send({ published: true }).expect(201);
+    expect(await db.lesson.count({ where: { course_id: id, status: 'PUBLISHED' } })).toBe(2);
+    await call(agents.STUDENT, 'post', `/enrollments/${id}/free`).expect(201);
+    const learning = async () =>
+      (await call(agents.STUDENT, 'get', `/courses/${id}/learning`).expect(200)).body.lessons.map((l: { title: string }) => l.title);
+    expect(await learning()).toEqual(['Check', 'Welcome']);
+
+    // Drafts stay invisible to students until "Publish changes".
+    const secret = await lesson(advanced, 'Secret', 'TEXT');
+    await call(agents.STUDENT, 'get', '/lessons/' + secret).expect(404);
+    const current = (await studio('get', `/lessons/${welcome}`).expect(200)).body;
+    await studio('patch', `/lessons/${welcome}/draft`).send({ ...draft, content: 'Version two of the welcome topic.', expected_revision: current.revision }).expect(200);
+    const studentView = (await call(agents.STUDENT, 'get', '/lessons/' + welcome).expect(200)).body;
+    expect(studentView.content).toBe(draft.content);
+    expect(studentView).not.toHaveProperty('draft');
+    expect(await learning()).toEqual(['Check', 'Welcome']);
+    expect((await studio('get', `/courses/${id}/curriculum`).expect(200)).body.pending_changes).toBe(2);
+    const before = await db.notification.count({ where: { user_id: ids.STUDENT, course_id: id } });
+    const pub = await studio('post', `/courses/${id}/publish-changes`).send({}).expect(201);
+    expect(pub.body).toMatchObject({ published: 2, created: 1, updated: 1 });
+    expect(await db.notification.count({ where: { user_id: ids.STUDENT, course_id: id } })).toBe(before + 1);
+    expect((await call(agents.STUDENT, 'get', '/lessons/' + welcome).expect(200)).body.content).toBe('Version two of the welcome topic.');
+    expect(await learning()).toEqual(['Check', 'Welcome', 'Secret']);
+
+    // Deleting removes the topic's progress; non-empty chapters cannot be deleted.
+    await call(agents.STUDENT, 'post', '/lessons/' + welcome + '/complete').expect(201);
+    expect((await studio('delete', `/lessons/${welcome}`).expect(200)).body.removed_progress_records).toBe(1);
+    await studio('delete', `/chapters/${advanced}`).expect(409);
+    const empty = (await studio('post', `/courses/${id}/chapters`).send({ title: 'Empty' }).expect(201)).body.id;
+    await studio('delete', `/chapters/${empty}`).expect(200);
+    expect(await db.auditLog.count({ where: { resource_id: welcome, action: 'LESSON_DELETED' } })).toBe(1);
+    await studio('post', `/courses/${id}/publish`).send({ published: false }).expect(201);
+  });
   it('awards and reverses contribution credits once and prevents self or duplicate upvotes', async () => {
     const voterId = randomUUID();
     await db.user.create({

@@ -431,3 +431,54 @@ export function shuffled<T>(items: T[]) {
   }
   return result;
 }
+
+export type WordingCorrection = {
+  id: string;
+  question?: string;
+  explanation?: string;
+  hint?: string;
+  image_alt?: string;
+  options?: { id: string; text: string }[];
+};
+const wordingFields = ['question', 'explanation', 'hint', 'image_alt'] as const;
+
+/**
+ * Apply text-only corrections to a bank that students have already attempted.
+ * Anything that affects grading (types, points, answer keys, option sets, order)
+ * is left untouched, so existing attempts keep their meaning.
+ */
+export function applyWordingCorrections(
+  bank: Question[],
+  corrections: WordingCorrection[],
+): { bank: Question[]; changed: string[] } {
+  const byId = new Map(bank.map((q) => [q.id, { ...q }]));
+  const changed = new Set<string>();
+  for (const c of corrections) {
+    const q = byId.get(c.id);
+    if (!q) fail('A corrected question no longer exists; reload the exam');
+    for (const key of wordingFields) {
+      const value = c[key];
+      if (value === undefined || value === q[key]) continue;
+      if (!text(value, 10000)) fail(`Invalid ${key}`);
+      if (key === 'hint' || key === 'image_alt') q[key] = value || undefined;
+      else q[key] = value;
+      changed.add(q.id);
+    }
+    if (c.options) {
+      if (!q.options) fail('This question has no answer options to correct');
+      const options = q.options.map((o) => ({ ...o }));
+      for (const o of c.options) {
+        const target = options.find((x) => x.id === o.id);
+        if (!target)
+          fail('Answer options cannot be added or removed after attempts');
+        if (!text(o.text, 2000, !target.image_id)) fail('Invalid option text');
+        if (target.text !== o.text) {
+          target.text = o.text;
+          changed.add(q.id);
+        }
+      }
+      q.options = options;
+    }
+  }
+  return { bank: bank.map((q) => byId.get(q.id)!), changed: [...changed] };
+}

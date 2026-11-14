@@ -28,6 +28,11 @@ enum EntitlementState {
   REVOKED
 }
 
+enum LessonStatus {
+  DRAFT
+  PUBLISHED
+}
+
 enum CourseVisibility {
   PUBLIC
   PRIVATE
@@ -164,6 +169,7 @@ model Course {
   updated_at    DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
   instructor    User         @relation(fields: [instructor_id], references: [id], onDelete: Restrict)
   lessons       Lesson[]
+  chapters      Chapter[]
   enrollments   Enrollment[]
   payments      Payment[]
   assessments   Assessment[]
@@ -308,11 +314,31 @@ model Lesson {
   storage_path String?
   quiz         Json?
   practice Boolean @default(false)
+  chapter_id   String?            @db.Uuid
+  status       LessonStatus       @default(PUBLISHED)
+  draft        Json?
+  revision     Int                @default(1)
+  published_at DateTime?          @db.Timestamptz(6)
   course       Course             @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  chapterRef   Chapter?           @relation(fields: [chapter_id], references: [id], onDelete: Restrict)
   progress     LearningProgress[]
 
   @@unique([course_id, position], map: "lessons_course_id_position_key")
+  @@index([chapter_id])
   @@map("lessons")
+}
+
+model Chapter {
+  id         String   @id @default(uuid()) @db.Uuid
+  course_id  String   @db.Uuid
+  title      String
+  position   Int
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  course     Course   @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  lessons    Lesson[]
+
+  @@unique([course_id, position])
+  @@map("chapters")
 }
 
 model AssessmentAttempt {

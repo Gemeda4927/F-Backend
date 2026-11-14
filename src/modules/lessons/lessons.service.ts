@@ -11,6 +11,10 @@ import type { CurrentUser } from '../../common/types.js';
 import { CoursesService } from '../courses/courses.service.js';
 import type { LessonDto, QuestionDto } from './lessons.dto.js';
 import { notifyCourse } from '../notifications/notifications.js';
+import { audit } from '../audit/audit.js';
+import { ensureChapter } from '../studio/curriculum.js';
+
+const day = () => new Date().toISOString().slice(0, 10);
 @Injectable()
 export class LessonsService {
   constructor(
@@ -22,11 +26,27 @@ export class LessonsService {
       where: { id },
       include: {
         course: {
-          select: { published: true, archived_at: true, visibility: true },
+          select: {
+            published: true,
+            archived_at: true,
+            visibility: true,
+            instructor_id: true,
+          },
         },
       },
     });
     if (!lesson) throw new NotFoundException('Lesson not found');
+    // Draft topics exist only for course managers until they are published.
+    if (
+      lesson.status === 'DRAFT' &&
+      !(
+        user &&
+        (['ADMIN', 'SUPER_ADMIN'].includes(user.role) ||
+          (user.role === 'INSTRUCTOR' &&
+            lesson.course.instructor_id === user.id))
+      )
+    )
+      throw new NotFoundException('Lesson not found');
     if (
       !(
         lesson.preview &&
@@ -43,7 +63,16 @@ export class LessonsService {
     return { ...safe, published: course.published };
   }
   private safe(lesson: Awaited<ReturnType<LessonsService['authorized']>>) {
-    const { storage_path, quiz, published: _published, ...safe } = lesson;
+    const {
+      storage_path,
+      quiz,
+      published: _published,
+      draft: _draft,
+      revision: _revision,
+      chapter_id: _chapterId,
+      published_at: _publishedAt,
+      ...safe
+    } = lesson;
     return {
       ...safe,
       has_file: !!storage_path,
@@ -80,6 +109,7 @@ export class LessonsService {
       throw new BadRequestException('Enter a chapter name');
     const data = {
       ...rest,
+      draft: Prisma.DbNull,
       quiz:
         dto.kind === 'QUIZ'
           ? (quiz as unknown as Prisma.InputJsonValue)
@@ -105,13 +135,34 @@ export class LessonsService {
           throw new ConflictException(
             `Content order ${dto.position} is already used in this course. Choose a different order.`,
           );
+        const chapter = await ensureChapter(
+          tx,
+          courseId,
+          dto.chapter ?? existing.chapter,
+        );
         const updated = await tx.lesson.update({
           where: { id },
-          data,
+          data: {
+            ...data,
+            chapter: chapter.title,
+            chapter_id: chapter.id,
+            status: 'PUBLISHED',
+            published_at: existing.published_at ?? new Date(),
+            revision: { increment: 1 },
+          },
           select: { id: true },
         });
+        await audit(tx, {
+          actor: user,
+          target: user.id,
+          action: 'LESSON_UPDATED',
+          description: `Topic updated: ${dto.title}`,
+          resourceType: 'LESSON',
+          resourceId: id,
+        });
         await notifyCourse(tx, courseId, {
-          event_key: `lesson-update:${id}:${new Date().toISOString()}`,
+          // At most one "updated" notice per topic per day, however often it is saved.
+          event_key: `lesson-update:${id}:${day()}`,
           kind: 'CONTENT',
           title: `Lesson updated: ${dto.title}`,
           message: 'Your instructor updated this learning activity.',
@@ -131,9 +182,25 @@ export class LessonsService {
         throw new ConflictException(
           `Content order ${dto.position} is already used in this course. Choose a different order.`,
         );
+      const chapter = await ensureChapter(tx, courseId, dto.chapter ?? '');
       const lesson = await tx.lesson.create({
-        data: { ...data, course_id: courseId },
+        data: {
+          ...data,
+          course_id: courseId,
+          chapter: chapter.title,
+          chapter_id: chapter.id,
+          status: 'PUBLISHED',
+          published_at: new Date(),
+        },
         select: { id: true },
+      });
+      await audit(tx, {
+        actor: user,
+        target: user.id,
+        action: 'LESSON_CREATED',
+        description: `Topic created: ${dto.title}`,
+        resourceType: 'LESSON',
+        resourceId: lesson.id,
       });
       await notifyCourse(tx, courseId, {
         event_key: `lesson:${lesson.id}`,

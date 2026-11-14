@@ -15,7 +15,8 @@ export class CourseDto {
   @IsString() @MinLength(2) @MaxLength(80) category!: string;
   @IsInt() @Min(0) @Max(100000000) price_minor!: number;
   @IsIn(['ETB', 'USD']) currency!: string;
-  @IsBoolean() published!: boolean;
+  /** Omit to leave publication unchanged; Course Studio publishes via /studio/courses/:id/publish. */
+  @IsOptional() @IsBoolean() published?: boolean;
   @IsOptional() @IsIn(['PUBLIC', 'PRIVATE', 'UNLISTED']) visibility?:
     'PUBLIC' | 'PRIVATE' | 'UNLISTED';
 }

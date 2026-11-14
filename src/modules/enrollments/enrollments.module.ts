@@ -26,8 +26,11 @@ class EnrollmentsController {
       include: {
         course: {
           include: {
-            _count: { select: { lessons: true } },
+            _count: {
+              select: { lessons: { where: { status: 'PUBLISHED' } } },
+            },
             lessons: {
+              where: { status: 'PUBLISHED' },
               select: {
                 _count: { select: { progress: { where: { user_id: u.id } } } },
               },
