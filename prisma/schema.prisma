@@ -70,6 +70,7 @@ model User {
   notifications Notification[]
   assessmentAttempts AssessmentAttempt[]
   assessmentFiles AssessmentFile[]
+  courseViews    CourseView[]
 
   @@index([role_id])
   @@map("users")
@@ -176,6 +177,7 @@ model Course {
   thumbnail     CourseThumbnail?
   contributions Contribution[]
   notifications Notification[]
+  views         CourseView[]
 
   @@index([instructor_id])
   @@index([published, created_at])
@@ -242,6 +244,22 @@ model CourseThumbnail {
   course     Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
 
   @@map("course_thumbnails")
+}
+
+model CourseView {
+  id                 String   @id @default(uuid()) @db.Uuid
+  course_id          String   @db.Uuid
+  student_id         String   @db.Uuid
+  session_key        String   @unique
+  opened_at          DateTime @default(now()) @db.Timestamptz(6)
+  last_seen_at       DateTime @default(now()) @db.Timestamptz(6)
+  course             Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  student            User     @relation(fields: [student_id], references: [id], onDelete: Restrict)
+
+  @@index([course_id, opened_at])
+  @@index([student_id, opened_at])
+  @@index([course_id, student_id, opened_at])
+  @@map("course_views")
 }
 
 model Assessment {
