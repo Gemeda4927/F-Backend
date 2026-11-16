@@ -188,7 +188,7 @@ No real charge, refund or email is sent by automated tests.
 | COOKIE_SAME_SITE | lax normally; none requires secure HTTPS cookies |
 | APP_ENV | development locally; production enforces HTTPS, secure cookies and live Chapa mode |
 | CHAPA_MODE / CHAPA_SECRET_KEY / CHAPA_WEBHOOK_SECRET | Provider mode and private credentials |
-| SMTP_HOST / SMTP_PORT / SMTP_SECURE | Recovery mail transport |
+| SMTP_HOST / SMTP_PORT / SMTP_SECURE | Recovery mail transport; reset links expire after 15 minutes |
 | SMTP_USER / SMTP_PASSWORD / MAIL_FROM | Mail credentials and sender |
 | PRIVATE_STORAGE_DIR | Non-public material storage directory |
 | BOOTSTRAP_EMAIL / BOOTSTRAP_PASSWORD | Optional one-time owner seed |
