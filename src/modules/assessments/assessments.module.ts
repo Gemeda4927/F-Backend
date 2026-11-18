@@ -76,7 +76,7 @@ class AssessmentDto {
   @IsOptional() @IsString() @MaxLength(120) chapter?: string;
   @IsOptional() @IsInt() @Min(0) @Max(100) passing_percent?: number;
   @IsOptional()
-  @IsIn(['AFTER_QUESTION', 'AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
+  @IsIn(['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
   review_policy?: string;
   @IsOptional() @IsBoolean() randomize_questions?: boolean;
   @IsOptional() @IsBoolean() randomize_options?: boolean;
@@ -119,7 +119,7 @@ class WordingCorrectionsDto {
   questions!: QuestionWordingDto[];
 }
 class ReviewPolicyDto {
-  @IsIn(['AFTER_QUESTION', 'AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
+  @IsIn(['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
   review_policy!: string;
 }
 class AnswerDto {
@@ -474,7 +474,6 @@ export class AssessmentsController {
       );
       const bank = a.question_bank as Question[];
       const effectiveReviewPolicy = [
-        'AFTER_QUESTION',
         'AFTER_SUBMISSION',
         'AFTER_CLOSE',
         'NEVER',
@@ -486,25 +485,9 @@ export class AssessmentsController {
         !!a.submissions[0]?.reviewed_at &&
         a.results_published &&
         effectiveReviewPolicy !== 'NEVER' &&
-        effectiveReviewPolicy !== 'AFTER_QUESTION' &&
         (effectiveReviewPolicy !== 'AFTER_CLOSE' ||
           (!!a.due_at && a.due_at <= new Date()));
-      const immediateReview =
-        student && effectiveReviewPolicy === 'AFTER_QUESTION' && !!active;
-      const answeredIds = new Set(
-        Object.entries((active?.responses ?? {}) as Record<string, unknown>)
-          .filter(
-            ([, value]) =>
-              value !== '' &&
-              (!Array.isArray(value) || value.length > 0),
-          )
-          .map(([id]) => id),
-      );
-      const reviewBank = immediateReview
-        ? bank.filter((q) => answeredIds.has(q.id))
-        : canReview
-          ? bank
-          : [];
+      const reviewBank = canReview ? bank : [];
       const visible = !student || !!active || canReview;
       const attemptOrder = active?.question_order ?? [];
       const ordered = attemptOrder.length
