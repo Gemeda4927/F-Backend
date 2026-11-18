@@ -32,6 +32,11 @@ try {
       name: 'Instructor ' + (i + 1),
       role: 'INSTRUCTOR',
     })),
+    {
+      email: 'gemedaforwork@gmail.com',
+      name: 'Gemeda For Work',
+      role: 'INSTRUCTOR',
+    },
   ];
   await db.$transaction(
     async (tx) => {
@@ -40,7 +45,28 @@ try {
           where: { email: account.email },
         });
         if (existing) {
-          if (existing.role !== account.role)
+          if (
+            account.email === 'gemedaforwork@gmail.com' &&
+            existing.role !== account.role
+          ) {
+            await tx.user.update({
+              where: { id: existing.id },
+              data: {
+                role: account.role,
+                role_id: account.role,
+                auth_version: { increment: 1 },
+              },
+            });
+            await tx.authSession.updateMany({
+              where: { user_id: existing.id, revoked_at: null },
+              data: { revoked_at: new Date() },
+            });
+            await tx.studentDevice.updateMany({
+              where: { user_id: existing.id, revoked_at: null },
+              data: { revoked_at: new Date() },
+            });
+            console.log('Updated instructor account: ' + account.email);
+          } else if (existing.role !== account.role)
             throw Error('Existing account role mismatch: ' + account.email);
           continue;
         }

@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   Post,
+  Query,
   Req,
   Res,
 } from '@nestjs/common';
@@ -18,6 +19,7 @@ import {
   ProfileDto,
   RegisterDto,
   ResetDto,
+  ValidateResetDto,
 } from './auth.dto.js';
 
 @Controller('auth')
@@ -129,5 +131,10 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   reset(@Body() dto: ResetDto) {
     return this.service.reset(dto);
+  }
+  @Public()
+  @Get('reset-password/validate')
+  validateReset(@Query() dto: ValidateResetDto) {
+    return this.service.validateReset(dto.token);
   }
 }
