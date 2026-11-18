@@ -76,13 +76,7 @@ class AssessmentDto {
   @IsOptional() @IsString() @MaxLength(120) chapter?: string;
   @IsOptional() @IsInt() @Min(0) @Max(100) passing_percent?: number;
   @IsOptional()
-  @IsIn([
-    'STUDENT_CHOICE',
-    'AFTER_QUESTION',
-    'AFTER_SUBMISSION',
-    'AFTER_CLOSE',
-    'NEVER',
-  ])
+  @IsIn(['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
   review_policy?: string;
   @IsOptional() @IsBoolean() randomize_questions?: boolean;
   @IsOptional() @IsBoolean() randomize_options?: boolean;
@@ -124,19 +118,8 @@ class WordingCorrectionsDto {
   @Type(() => QuestionWordingDto)
   questions!: QuestionWordingDto[];
 }
-class StartDto {
-  @IsOptional()
-  @IsIn(['AFTER_QUESTION', 'AFTER_SUBMISSION'])
-  review_policy?: string;
-}
 class ReviewPolicyDto {
-  @IsIn([
-    'STUDENT_CHOICE',
-    'AFTER_QUESTION',
-    'AFTER_SUBMISSION',
-    'AFTER_CLOSE',
-    'NEVER',
-  ])
+  @IsIn(['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
   review_policy!: string;
 }
 class AnswerDto {
@@ -490,33 +473,19 @@ export class AssessmentsController {
         (t) => !t.submitted_at && (!t.expires_at || t.expires_at > new Date()),
       );
       const bank = a.question_bank as Question[];
-      const effectiveReviewPolicy = active?.review_policy ?? a.review_policy;
+      const effectiveReviewPolicy = ['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'].includes(
+        active?.review_policy ?? a.review_policy,
+      )
+        ? (active?.review_policy ?? a.review_policy)
+        : 'AFTER_SUBMISSION';
       const canReview =
         student &&
         !!a.submissions[0]?.reviewed_at &&
         a.results_published &&
         effectiveReviewPolicy !== 'NEVER' &&
-        effectiveReviewPolicy !== 'AFTER_QUESTION' &&
         (effectiveReviewPolicy !== 'AFTER_CLOSE' ||
           (!!a.due_at && a.due_at <= new Date()));
-      const immediateReview =
-        student && effectiveReviewPolicy === 'AFTER_QUESTION' && !!active;
-      const answeredIds = new Set(
-        Object.entries(
-          (active?.responses ?? {}) as Record<string, unknown>,
-        )
-          .filter(
-            ([, value]) =>
-              value !== '' &&
-              (!Array.isArray(value) || value.length > 0),
-          )
-          .map(([id]) => id),
-      );
-      const reviewBank = immediateReview
-        ? bank.filter((q) => answeredIds.has(q.id))
-        : canReview
-          ? bank
-          : [];
+      const reviewBank = canReview ? bank : [];
       const visible = !student || !!active || canReview;
       const attemptOrder = active?.question_order ?? [];
       const ordered = attemptOrder.length
@@ -623,7 +592,6 @@ export class AssessmentsController {
     tx: Prisma.TransactionClient,
     u: CurrentUser,
     a: Assessment,
-    reviewChoice?: string,
   ) {
     assertAvailable(a);
     if (a.published === false)
@@ -674,10 +642,7 @@ export class AssessmentsController {
                 : q.options!.map((o) => o.id),
             ]),
         ),
-        review_policy:
-          a.review_policy === 'STUDENT_CHOICE'
-            ? reviewChoice ?? 'AFTER_SUBMISSION'
-            : a.review_policy,
+        review_policy: a.review_policy,
         expires_at:
           expires && a.due_at && a.due_at < expires ? a.due_at : expires,
       },
@@ -686,7 +651,6 @@ export class AssessmentsController {
   @Post(':id/start') async start(
     @User() u: CurrentUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: StartDto,
   ) {
     if (u.role !== 'STUDENT')
       throw new ForbiddenException('Student account required');
@@ -694,7 +658,7 @@ export class AssessmentsController {
     return this.db.atomic(async (tx) => {
       const a = await tx.assessment.findUniqueOrThrow({ where: { id } });
       return {
-        ...(await this.startAttempt(tx, u, a, dto.review_policy)),
+        ...(await this.startAttempt(tx, u, a)),
         server_now: new Date().toISOString(),
       };
     });
