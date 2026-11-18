@@ -22,6 +22,9 @@ export class ResetDto {
   @IsString() @MinLength(40) @MaxLength(200) token!: string;
   @IsString() @MinLength(12) @MaxLength(72) password!: string;
 }
+export class ValidateResetDto {
+  @IsString() @MinLength(40) @MaxLength(200) token!: string;
+}
 export class ProfileDto {
   @IsString() @MinLength(2) @MaxLength(100) name!: string;
 }

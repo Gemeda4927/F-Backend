@@ -376,6 +376,7 @@ model AssessmentAttempt {
   saved_at DateTime? @db.Timestamptz(6)
   save_version Int @default(0)
   access_key String @default(uuid()) @db.Uuid
+  review_policy String?
   score Int?
   feedback String?
   assessment Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)

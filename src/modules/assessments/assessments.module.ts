@@ -76,7 +76,7 @@ class AssessmentDto {
   @IsOptional() @IsString() @MaxLength(120) chapter?: string;
   @IsOptional() @IsInt() @Min(0) @Max(100) passing_percent?: number;
   @IsOptional()
-  @IsIn(['AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
+  @IsIn(['AFTER_QUESTION', 'AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
   review_policy?: string;
   @IsOptional() @IsBoolean() randomize_questions?: boolean;
   @IsOptional() @IsBoolean() randomize_options?: boolean;
@@ -117,6 +117,10 @@ class WordingCorrectionsDto {
   @ValidateNested({ each: true })
   @Type(() => QuestionWordingDto)
   questions!: QuestionWordingDto[];
+}
+class ReviewPolicyDto {
+  @IsIn(['AFTER_QUESTION', 'AFTER_SUBMISSION', 'AFTER_CLOSE', 'NEVER'])
+  review_policy!: string;
 }
 class AnswerDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(50000) answer?: string;
@@ -293,15 +297,23 @@ export class AssessmentsController {
     const a = await this.allowed(u, id);
     await this.courses.assertOwner(u, a.course_id);
     return this.db.atomic(async (tx) => {
-      if (
-        (await tx.assessmentSubmission.count({
-          where: { assessment_id: id },
-        })) ||
-        (await tx.assessmentAttempt.count({ where: { assessment_id: id } }))
-      )
-        throw new ConflictException(
-          'Activities with attempts or submissions cannot be edited; publish results separately',
+      const hasAttempts =
+        (await tx.assessmentSubmission.count({ where: { assessment_id: id } })) >
+          0 ||
+        (await tx.assessmentAttempt.count({ where: { assessment_id: id } })) > 0;
+      if (hasAttempts) {
+        const keys = Object.keys(dto).filter(
+          (key) => key !== 'review_policy' && key !== 'expected_revision',
         );
+        if (keys.length || !dto.review_policy)
+          throw new ConflictException(
+            'Activities with attempts or submissions cannot be edited; only the answer-review policy can be changed',
+          );
+        return tx.assessment.update({
+          where: { id },
+          data: { review_policy: dto.review_policy },
+        });
+      }
       const current = await tx.assessment.findUniqueOrThrow({ where: { id } });
       if (
         dto.expected_revision !== undefined &&
@@ -334,6 +346,18 @@ export class AssessmentsController {
           href: `/learn/${updated.course_id}/activities/${id}?type=assessment`,
         });
       return updated;
+    });
+  }
+  @Permissions('courses:write') @Patch(':id/review-policy') async updateReviewPolicy(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReviewPolicyDto,
+  ) {
+    const a = await this.allowed(u, id);
+    await this.courses.assertOwner(u, a.course_id);
+    return this.db.assessment.update({
+      where: { id },
+      data: { review_policy: dto.review_policy },
     });
   }
   /** Typo and wording fixes for exams that already have attempts; grading data stays locked. */
@@ -437,6 +461,7 @@ export class AssessmentsController {
             save_version: true,
             question_order: true,
             option_order: true,
+            review_policy: true,
           },
           orderBy: { number: 'desc' },
         },
@@ -448,13 +473,38 @@ export class AssessmentsController {
         (t) => !t.submitted_at && (!t.expires_at || t.expires_at > new Date()),
       );
       const bank = a.question_bank as Question[];
+      const effectiveReviewPolicy = [
+        'AFTER_QUESTION',
+        'AFTER_SUBMISSION',
+        'AFTER_CLOSE',
+        'NEVER',
+      ].includes(active?.review_policy ?? a.review_policy)
+        ? (active?.review_policy ?? a.review_policy)
+        : 'AFTER_SUBMISSION';
       const canReview =
         student &&
         !!a.submissions[0]?.reviewed_at &&
         a.results_published &&
-        a.review_policy !== 'NEVER' &&
-        (a.review_policy !== 'AFTER_CLOSE' ||
+        effectiveReviewPolicy !== 'NEVER' &&
+        effectiveReviewPolicy !== 'AFTER_QUESTION' &&
+        (effectiveReviewPolicy !== 'AFTER_CLOSE' ||
           (!!a.due_at && a.due_at <= new Date()));
+      const immediateReview =
+        student && effectiveReviewPolicy === 'AFTER_QUESTION' && !!active;
+      const answeredIds = new Set(
+        Object.entries((active?.responses ?? {}) as Record<string, unknown>)
+          .filter(
+            ([, value]) =>
+              value !== '' &&
+              (!Array.isArray(value) || value.length > 0),
+          )
+          .map(([id]) => id),
+      );
+      const reviewBank = immediateReview
+        ? bank.filter((q) => answeredIds.has(q.id))
+        : canReview
+          ? bank
+          : [];
       const visible = !student || !!active || canReview;
       const attemptOrder = active?.question_order ?? [];
       const ordered = attemptOrder.length
@@ -489,7 +539,8 @@ export class AssessmentsController {
         typed: a.structured || !!bank.length,
         has_attempts:
           !student && (a._count.attempts > 0 || a._count.submissions > 0),
-        answer_review: canReview ? bank.map(answerReview) : [],
+        answer_review: reviewBank.map(answerReview),
+        review_policy: effectiveReviewPolicy,
         questions:
           student && a.kind === 'EXAM' && !a.submissions.length && !active
             ? []
@@ -610,6 +661,7 @@ export class AssessmentsController {
                 : q.options!.map((o) => o.id),
             ]),
         ),
+        review_policy: a.review_policy,
         expires_at:
           expires && a.due_at && a.due_at < expires ? a.due_at : expires,
       },

@@ -280,7 +280,7 @@ export class AuthService {
           data: {
             user_id: user.id,
             token_hash: digest(token),
-            expires_at: new Date(Date.now() + 30 * 60000),
+            expires_at: new Date(Date.now() + 15 * 60000),
           },
         });
       });
@@ -295,22 +295,35 @@ export class AuthService {
     this.passwordValid(dto.password);
     const hash = await bcrypt.hash(dto.password, 12);
     await this.db.atomic(async (tx) => {
+      const now = new Date();
       const reset = await tx.passwordResetToken.findFirst({
         where: {
           token_hash: digest(dto.token),
           consumed_at: null,
-          expires_at: { gt: new Date() },
+          expires_at: { gt: now },
         },
       });
       if (!reset)
+        throw new BadRequestException('Invalid or expired recovery link');
+      // Claim the row conditionally. This makes two concurrent submissions
+      // with the same token mutually exclusive inside the database.
+      const claimed = await tx.passwordResetToken.updateMany({
+        where: {
+          id: reset.id,
+          consumed_at: null,
+          expires_at: { gt: now },
+        },
+        data: { consumed_at: now },
+      });
+      if (claimed.count !== 1)
         throw new BadRequestException('Invalid or expired recovery link');
       await tx.user.update({
         where: { id: reset.user_id },
         data: { password_hash: hash, auth_version: { increment: 1 } },
       });
       await tx.passwordResetToken.updateMany({
-        where: { user_id: reset.user_id },
-        data: { consumed_at: new Date() },
+        where: { user_id: reset.user_id, consumed_at: null },
+        data: { consumed_at: now },
       });
       await tx.authSession.updateMany({
         where: { user_id: reset.user_id, revoked_at: null },
@@ -330,6 +343,19 @@ export class AuthService {
     return {
       message: 'Password reset. Sign in to register your current browser.',
     };
+  }
+  async validateReset(token: string) {
+    if (!token) throw new BadRequestException('Invalid or expired recovery link');
+    const reset = await this.db.passwordResetToken.findFirst({
+      where: {
+        token_hash: digest(token),
+        consumed_at: null,
+        expires_at: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+    if (!reset) throw new BadRequestException('Invalid or expired recovery link');
+    return { valid: true };
   }
   profile(user: CurrentUser, name: string) {
     return this.db.atomic(async (tx) => {
