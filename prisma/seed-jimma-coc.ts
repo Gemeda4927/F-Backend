@@ -24,6 +24,7 @@ type CsvRow = {
   question: string;
   correctAnswer: string;
   whyCorrect: string;
+  whyOthersIncorrect: string;
   limitation: string;
 };
 
@@ -70,8 +71,13 @@ function readRows(): CsvRow[] {
   const question = index('Question');
   const correctAnswer = index('Correct Answer / Concept');
   const whyCorrect = index('Why This Is Correct');
+  const whyOthersIncorrect = index('Why Other Common Answers Are Incorrect');
   const limitation = index('Verification / Limitation');
-  if ([question, correctAnswer, whyCorrect, limitation].some((i) => i < 0))
+  if (
+    [question, correctAnswer, whyCorrect, whyOthersIncorrect, limitation].some(
+      (i) => i < 0,
+    )
+  )
     throw new Error('CSV is missing one or more required columns');
   return rows
     .filter((row) => row[question]?.trim())
@@ -79,6 +85,7 @@ function readRows(): CsvRow[] {
       question: row[question].trim(),
       correctAnswer: row[correctAnswer]?.trim() || 'Answer not provided',
       whyCorrect: row[whyCorrect]?.trim() || '',
+      whyOthersIncorrect: row[whyOthersIncorrect]?.trim() || '',
       limitation: row[limitation]?.trim() || '',
     }));
 }
@@ -161,6 +168,21 @@ const questionOverrides: Record<number, string> = {
 
 const courseTitle = 'JIMMA COC FOR HEALTH STUDENTS';
 const examTitle = 'JIMMA COC Exit Exam: 59 Questions';
+function optionExplanation(
+  row: CsvRow,
+  option: string,
+  optionIndex: number,
+  correct: string,
+) {
+  if (optionIndex === 0)
+    return `Correct. ${row.whyCorrect || 'This option matches the tested concept.'}`;
+  const reasons = row.whyOthersIncorrect
+    .split(/;\s+/)
+    .map((reason) => reason.trim())
+    .filter(Boolean);
+  const detail = reasons[optionIndex - 1] ?? row.whyOthersIncorrect;
+  return `Not correct: “${option}” does not answer the question. The correct answer is “${correct}”. ${detail || 'It does not match the tested concept.'}`;
+}
 const bank = rows.map((row, index) => ({
   id: `jimma-coc-q-${index + 1}`,
   type: 'MCQ',
@@ -170,6 +192,12 @@ const bank = rows.map((row, index) => ({
   options: (optionSets[index + 1] ?? []).map((text, optionIndex) => ({
     id: String.fromCharCode(97 + optionIndex),
     text,
+    explanation: optionExplanation(
+      row,
+      text,
+      optionIndex,
+      optionSets[index + 1]?.[0] ?? row.correctAnswer,
+    ),
   })),
   correct: ['a'],
   explanation: [

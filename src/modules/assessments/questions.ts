@@ -14,7 +14,12 @@ export type Question = {
   image_id?: string;
   image_alt?: string;
   response_type?: 'MCQ' | 'BLANK' | 'BOOLEAN' | 'SHORT';
-  options?: { id: string; text: string; image_id?: string }[];
+  options?: {
+    id: string;
+    text: string;
+    image_id?: string;
+    explanation?: string;
+  }[];
   correct?: string[];
   partial_credit?: boolean;
   accepted?: string[][];
@@ -165,7 +170,11 @@ export function validateBank(value: unknown, published = true): Question[] {
           optionIds.has(o.id) ||
           !text(o.text, 2000, published && !o.image_id) ||
           (o.image_id && !uuidPattern.test(o.image_id)) ||
-          Object.keys(o).some((k) => !['id', 'text', 'image_id'].includes(k))
+          (o.explanation !== undefined &&
+            !text(o.explanation, 5000, published)) ||
+          Object.keys(o).some(
+            (k) => !['id', 'text', 'image_id', 'explanation'].includes(k),
+          )
         )
           fail('Invalid or duplicate answer option');
         optionIds.add(o.id);
@@ -421,6 +430,11 @@ export function answerReview(q: Question) {
     correct_boolean: q.correct_boolean,
     model_answer: q.model_answer,
     explanation: q.explanation,
+    option_explanations: Object.fromEntries(
+      (q.options ?? [])
+        .filter((option) => option.explanation)
+        .map((option) => [option.id, option.explanation]),
+    ),
   };
 }
 export function shuffled<T>(items: T[]) {
@@ -438,7 +452,7 @@ export type WordingCorrection = {
   explanation?: string;
   hint?: string;
   image_alt?: string;
-  options?: { id: string; text: string }[];
+  options?: { id: string; text: string; explanation?: string }[];
 };
 const wordingFields = ['question', 'explanation', 'hint', 'image_alt'] as const;
 
@@ -472,8 +486,14 @@ export function applyWordingCorrections(
         if (!target)
           fail('Answer options cannot be added or removed after attempts');
         if (!text(o.text, 2000, !target.image_id)) fail('Invalid option text');
-        if (target.text !== o.text) {
+        if (
+          o.explanation !== undefined &&
+          !text(o.explanation, 5000, true)
+        )
+          fail('Invalid option explanation');
+        if (target.text !== o.text || target.explanation !== o.explanation) {
           target.text = o.text;
+          target.explanation = o.explanation;
           changed.add(q.id);
         }
       }
