@@ -28,7 +28,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "db:seed:accounts": "tsx prisma/seed-accounts.ts",
-    "db:seed:critical-thinking": "tsx prisma/seed-critical-thinking.ts"
+    "db:seed:critical-thinking": "tsx prisma/seed-critical-thinking.ts",
+    "db:seed:phil1011-chapter-one": "tsx prisma/seed-phil1011-chapter-one.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
