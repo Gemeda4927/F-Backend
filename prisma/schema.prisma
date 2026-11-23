@@ -39,6 +39,12 @@ enum CourseVisibility {
   UNLISTED
 }
 
+enum ExamType {
+  MID
+  FINAL
+  EXIT
+}
+
 model User {
   id             String               @id @default(uuid()) @db.Uuid
   email          String               @unique
@@ -267,6 +273,10 @@ model Assessment {
   course_id   String   @db.Uuid
   title       String
   kind        String
+  exam_type   ExamType?
+  university  String?
+  campus      String?
+  department  String?
   prompt      String
   questions   Json     @default("[]")
   question_bank Json @default("[]")
@@ -296,6 +306,7 @@ model Assessment {
   files AssessmentFile[]
 
   @@index([course_id])
+  @@index([published, exam_type, university, campus, department])
   @@map("assessments")
 }
 

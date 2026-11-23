@@ -11,6 +11,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseInterceptors,
@@ -62,6 +63,10 @@ import { notify, notifyCourse } from '../notifications/notifications.js';
 class AssessmentDto {
   @IsString() @MinLength(3) @MaxLength(160) title!: string;
   @IsIn(['EXAM', 'ASSIGNMENT']) kind!: string;
+  @IsOptional() @IsIn(['MID', 'FINAL', 'EXIT']) exam_type?: 'MID' | 'FINAL' | 'EXIT' | null;
+  @IsOptional() @IsString() @MaxLength(160) university?: string | null;
+  @IsOptional() @IsString() @MaxLength(160) campus?: string | null;
+  @IsOptional() @IsString() @MaxLength(160) department?: string | null;
   @IsString() @MinLength(3) @MaxLength(20000) prompt!: string;
   @IsInt() @Min(1) @Max(10000) max_score!: number;
   @IsOptional()
@@ -219,6 +224,10 @@ export class AssessmentsController {
       practice: dto.practice,
       title: dto.title,
       kind: dto.kind,
+      exam_type: dto.exam_type,
+      university: dto.university,
+      campus: dto.campus,
+      department: dto.department,
       prompt: dto.prompt,
       max_score: bank?.length
         ? bank.reduce((sum, q) => sum + q.points, 0)
@@ -578,6 +587,73 @@ export class AssessmentsController {
     if (!(await this.courses.canAccess(u, courseId)))
       throw new ForbiddenException('Course access required');
     return this.items(u, { course_id: courseId });
+  }
+  @Get('catalog') async catalog(
+    @User() u: CurrentUser,
+    @Query('exam_type') examType?: string,
+    @Query('university') university?: string,
+    @Query('campus') campus?: string,
+    @Query('department') department?: string,
+    @Query('search') search?: string,
+    @Query('page') pageParam?: string,
+    @Query('page_size') pageSizeParam?: string,
+  ) {
+    const page = Math.max(1, Number(pageParam) || 1);
+    const pageSize = Math.min(48, Math.max(1, Number(pageSizeParam) || 12));
+    const base: Prisma.AssessmentWhereInput = {
+      published: true,
+      kind: 'EXAM',
+      exam_type: ['MID', 'FINAL', 'EXIT'].includes(examType ?? '')
+        ? (examType as 'MID' | 'FINAL' | 'EXIT')
+        : undefined,
+      university: university ? { equals: university } : undefined,
+      campus: campus ? { equals: campus } : undefined,
+      department: department ? { equals: department } : undefined,
+      course: { published: true, archived_at: null, visibility: 'PUBLIC' },
+      ...(search
+        ? { OR: [{ title: { contains: search, mode: 'insensitive' } }, { course: { title: { contains: search, mode: 'insensitive' } } }] }
+        : {}),
+    };
+    const [rows, total, facets] = await Promise.all([
+      this.db.assessment.findMany({
+        where: base,
+        orderBy: { created_at: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true, title: true, exam_type: true, university: true, campus: true,
+          department: true, max_score: true, question_bank: true, questions: true,
+          opens_at: true, due_at: true,
+          course: { select: { id: true, title: true, price_minor: true, currency: true, thumbnail: { select: { course_id: true } } } },
+        },
+      }),
+      this.db.assessment.count({ where: base }),
+      this.db.assessment.findMany({
+        where: { published: true, kind: 'EXAM', course: { published: true, archived_at: null, visibility: 'PUBLIC' } },
+        select: { exam_type: true, university: true, campus: true, department: true },
+        orderBy: [{ university: 'asc' }, { campus: 'asc' }, { department: 'asc' }],
+      }),
+    ]);
+    const unique = (values: (string | null)[]) => [...new Set(values.filter((v): v is string => !!v))];
+    const access = await Promise.all(rows.map((row) => this.courses.canAccess(u, row.course.id)));
+    return {
+      items: rows.map((row, index) => ({
+        id: row.id, title: row.title, exam_type: row.exam_type, university: row.university,
+        campus: row.campus, department: row.department, max_score: row.max_score,
+        question_count: (row.question_bank as unknown[]).length || (row.questions as unknown[]).length,
+        has_thumbnail: !!row.course.thumbnail, course: { id: row.course.id, title: row.course.title },
+        price_minor: row.course.price_minor, currency: row.course.currency,
+        access_status: access[index] ? 'AVAILABLE' : row.course.price_minor ? 'ACCESS_REQUIRED' : 'AVAILABLE',
+        opens_at: row.opens_at, due_at: row.due_at,
+      })),
+      facets: {
+        exam_types: unique(facets.map((f) => f.exam_type)),
+        universities: unique(facets.map((f) => f.university)),
+        campuses: unique(facets.filter((f) => !university || f.university === university).map((f) => f.campus)),
+        departments: unique(facets.filter((f) => (!university || f.university === university) && (!campus || f.campus === campus)).map((f) => f.department)),
+      },
+      page, page_size: pageSize, total,
+    };
   }
   @Get(':id') async detail(
     @User() u: CurrentUser,

@@ -74,17 +74,13 @@ const passage = exam.sections
   .flatMap((section) => section.passage_paragraphs)
   .map((paragraph: SourceQuestion) => `${paragraph.number}. ${paragraph.text}`)
   .join('\n\n');
-const studyGuideText = [
-  '## Reading skills',
-  ...(exam.study_guide?.reading_skills ?? []).map(
-    (item: Record<string, string>) => `### ${item.skill}\n\n${item.description}\n\n**Example:** ${item.example}`,
-  ),
-  '## Grammar rules',
-  ...(exam.study_guide?.grammar_rules ?? []).map(
-    (item: Record<string, string>) => `### ${item.topic}\n\n**Structure:** ${item.structure}\n\n**Usage:** ${item.usage}\n\n**Example:** ${item.example}`,
-  ),
-].join('\n\n');
 const courseTitle = `Jimma English Examination — ${year} (Set 01)`;
+const examPrompt = [
+  '# The dangers of cramming',
+  passage,
+  '## Instructions',
+  `Read the passage carefully, then answer all ${questions.length} questions below. Review explanations after submitting.`,
+].join('\n\n');
 
 try {
   const instructor = await db.user.findFirst({
@@ -123,20 +119,20 @@ try {
     create: {
       id: id('lesson'),
       course_id: course.id,
-      title: 'Reading passage and study guide',
+      title: 'Exam preparation',
       chapter: 'English Language Examination',
       position: 0,
       kind: 'TEXT',
       preview: true,
-      content: `# The dangers of cramming\n\n${passage}\n\n# Study guide\n\n${studyGuideText}`,
+      content: '# Exam preparation\n\nRead the passage in the exam, then answer the questions below it.',
       status: 'PUBLISHED',
     },
     update: {
-      title: 'Reading passage and study guide',
+      title: 'Exam preparation',
       chapter: 'English Language Examination',
       kind: 'TEXT',
       preview: true,
-      content: `# The dangers of cramming\n\n${passage}\n\n# Study guide\n\n${studyGuideText}`,
+      content: '# Exam preparation\n\nRead the passage in the exam, then answer the questions below it.',
       status: 'PUBLISHED',
     },
   });
@@ -148,7 +144,11 @@ try {
       course_id: course.id,
       title: courseTitle,
       kind: 'EXAM',
-      prompt: 'Answer all 25 questions. Review the explanation after each response and use the study guide to revise weak areas.',
+      exam_type: 'MID',
+      university: 'Jimma University',
+      campus: 'Jimma Main Campus',
+      department: 'Freshman Program',
+      prompt: examPrompt,
       questions: [],
       question_bank: bank as Prisma.InputJsonValue,
       structured: true,
@@ -169,7 +169,11 @@ try {
     },
     update: {
       course_id: course.id,
-      prompt: 'Answer all 25 questions. Review the explanation after each response and use the study guide to revise weak areas.',
+      prompt: examPrompt,
+      exam_type: 'MID',
+      university: 'Jimma University',
+      campus: 'Jimma Main Campus',
+      department: 'Freshman Program',
       question_bank: bank as Prisma.InputJsonValue,
       structured: true,
       published: true,

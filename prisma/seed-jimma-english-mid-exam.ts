@@ -25,35 +25,24 @@ function id(key: string) {
 type AnyRecord = Record<string, any>;
 const source = JSON.parse(readFileSync(sourcePath, 'utf8')) as AnyRecord;
 const reading = source.reading ?? {};
-const grammar = source.grammar ?? {};
 const bank: AnyRecord[] = [];
 
-function addShort(section: string, item: AnyRecord, index: number, answer: unknown, extra = '') {
-  const answerText = Array.isArray(answer) ? answer.join(' / ') : String(answer ?? 'Answer unavailable');
-  bank.push({
-    id: `jimma-english-mid-${bank.length + 1}`,
-    type: 'SHORT',
-    question: item.question ?? item.statement ?? `Question ${item.number ?? index}: original wording unavailable in the supplied source`,
-    points: 1,
-    difficulty: 'MEDIUM',
-    explanation: [item.explanation, item.rule, item.source_status, extra].filter(Boolean).join(' '),
-    grading_mode: 'MANUAL',
-    model_answer: answerText,
-  });
-}
-
-for (const item of reading.true_false?.questions ?? []) {
+for (const item of (reading.true_false?.questions ?? []).filter(
+  (candidate: AnyRecord) => typeof candidate.statement === 'string' && candidate.statement.trim(),
+)) {
   bank.push({
     id: `jimma-english-mid-${bank.length + 1}`,
     type: 'BOOLEAN',
-    question: item.statement ?? `True/False question ${item.number}: statement unavailable in the supplied source`,
+    question: item.statement,
     points: 1,
     difficulty: 'EASY',
     explanation: item.explanation ?? 'The original statement was not visible in the supplied pages.',
     correct_boolean: Boolean(item.answer),
   });
 }
-for (const item of reading.multiple_choice?.questions ?? []) {
+for (const item of (reading.multiple_choice?.questions ?? []).filter(
+  (candidate: AnyRecord) => typeof candidate.question === 'string' && candidate.question.trim() && Array.isArray(candidate.options),
+)) {
   bank.push({
     id: `jimma-english-mid-${bank.length + 1}`,
     type: 'MCQ',
@@ -69,60 +58,67 @@ for (const item of reading.multiple_choice?.questions ?? []) {
     correct: [String(item.correct_answer).toLowerCase()],
   });
 }
-for (const item of reading.reference_questions?.questions ?? [])
-  addShort('Reference questions', item, item.number, item.correct_answer);
-for (const item of reading.guessing_meaning?.questions ?? [])
-  addShort('Guessing meaning', item, item.number, item.answer, reading.guessing_meaning.note);
-for (const item of grammar.modal_answers?.questions ?? [])
-  addShort('Modal verbs', item, item.number, item.answer);
-for (const item of grammar.present_perfect_and_simple_past?.questions ?? [])
-  addShort('Tenses', item, item.number, item.answer);
-for (const item of grammar.conditionals?.questions ?? [])
-  addShort('Conditionals', item, item.number, item.answer, grammar.conditionals.general_rule);
 
 validateBank(bank, true);
 const title = `Jimma English Mid Exam — ${year} (Set 02)`;
+const courseDescription = `# Jimma English Mid Exam
+
+## Practice smart, learn better, succeed
+
+Prepare confidently for the Jimma University English midterm examination with practice questions, detailed explanations, and useful study materials.
+
+## Exam topics
+
+- **Reading comprehension:** Main ideas, passage analysis, and reference questions.
+- **Vocabulary:** Word meanings, synonyms, and contextual understanding.
+- **True/False:** Evaluate statements based on reading passages.
+- **Modal verbs:** Should, might, ought to, and had better.
+- **English tenses:** Present perfect and past simple.
+- **Conditional sentences:** First, second, and third conditionals.
+
+## Exam features
+
+- Previous examination questions.
+- Multiple-choice and grammar exercises.
+- Correct answers with detailed explanations.
+- Reasons why incorrect answers are wrong.
+- Grammar rules with practical examples.
+- Vocabulary definitions and study tips.
+- Clear, organized learning materials.
+
+## Who should take this exam?
+
+- Jimma University students.
+- First-year students.
+- Students preparing for English midterm exams.
+- Anyone improving their English skills.
+
+## Learning objectives
+
+By completing this exam, you will be able to:
+
+1. Understand and analyze English reading passages.
+2. Identify correct grammar structures.
+3. Apply tenses and conditional sentences accurately.
+4. Improve vocabulary and comprehension skills.
+5. Learn from mistakes using detailed explanations.
+6. Build confidence for your actual examination.
+
+## Study tip
+
+Do not just memorize answers. Understand why each answer is correct and why the other options are wrong.
+
+**Study smart. Practice more. Prepare with confidence.**`;
 const readingOverview = (reading.passage_excerpt ?? [])
   .map((item: AnyRecord) => `### ${item.topic}\n\n${item.text}`)
   .join('\n\n');
-const readingAnswers = [
-  ...(reading.true_false?.questions ?? []).map(
-    (item: AnyRecord) => `- **${item.number}. ${item.answer ? 'True' : 'False'}** — ${item.statement ?? 'Original statement unavailable in the supplied source.'} ${item.explanation ?? ''}`,
-  ),
-  ...(reading.multiple_choice?.questions ?? []).map(
-    (item: AnyRecord) => `- **${item.number}. ${item.correct_answer}** — ${item.question}`,
-  ),
-].join('\n');
-const referenceAnswers = (reading.reference_questions?.questions ?? [])
-  .map((item: AnyRecord) => `- **${item.number}.** ${item.question ?? 'Original question unavailable.'} **Answer:** ${item.correct_answer}. ${item.explanation ?? ''}`)
-  .join('\n');
-const vocabularyAnswers = (reading.guessing_meaning?.questions ?? [])
-  .map((item: AnyRecord) => `- **${item.number}.** ${Array.isArray(item.answer) ? item.answer.join(', ') : item.answer}`)
-  .join('\n');
-const grammarBlock = [
-  '### Modal verbs',
-  ...(grammar.modal_answers?.questions ?? []).map((item: AnyRecord) => `- **${item.number}.** ${item.answer} — ${item.rule}.`),
-  '### Present perfect and simple past',
-  ...(grammar.present_perfect_and_simple_past?.questions ?? []).map((item: AnyRecord) => `- **${item.number}.** ${item.answer} — ${item.tense ?? ''}.`),
-  '### Conditionals',
-  ...(grammar.conditionals?.questions ?? []).map((item: AnyRecord) => `- **${item.number}.** ${item.answer} — ${item.rule}.`),
-].join('\n');
-const content = [
+const examPrompt = [
   `# ${reading.title ?? 'Kenyan Flowers and Environmental Impact'}`,
-  '## Reading overview',
   readingOverview,
-  '## Answer key: reading',
-  readingAnswers,
-  '## Reference questions',
-  referenceAnswers,
-  '## Guessing meaning',
-  vocabularyAnswers,
-  `# ${grammar.title ?? 'Grammar'}`,
-  grammarBlock,
-  '## Source limitations',
-  (source.source_limitations?.missing ?? []).map((item: string) => `- ${item}`).join('\n'),
-  `\n${source.source_limitations?.answer_key ?? ''}`,
+  '## Instructions',
+  `Read the passage carefully and answer the ${bank.length} questions below.`,
 ].join('\n\n');
+const content = '# Exam preparation\n\nRead the passage in the exam, then answer the questions below it.';
 
 try {
   const instructor = await db.user.findFirst({ where: { role: 'INSTRUCTOR', active: true }, orderBy: { created_at: 'asc' } });
@@ -131,32 +127,34 @@ try {
     where: { id: id('course') },
     create: {
       id: id('course'), instructor_id: instructor.id, title,
-      description: 'Jimma English mid-exam practice covering Kenyan flowers, environmental reading comprehension, vocabulary, modal verbs, tenses, and conditionals. Includes source-completeness notes.',
+      description: courseDescription,
       category: 'English Language', price_minor: 0, currency: 'ETB', published: true, visibility: 'PUBLIC',
     },
     update: {
       instructor_id: instructor.id, title,
-      description: 'Jimma English mid-exam practice covering Kenyan flowers, environmental reading comprehension, vocabulary, modal verbs, tenses, and conditionals. Includes source-completeness notes.',
+      description: courseDescription,
       category: 'English Language', price_minor: 0, currency: 'ETB', published: true, visibility: 'PUBLIC', archived_at: null,
     },
   });
   await db.lesson.upsert({
     where: { course_id_position: { course_id: course.id, position: 0 } },
-    create: { id: id('lesson'), course_id: course.id, title: 'Kenyan flowers reading and grammar notes', chapter: title, position: 0, kind: 'TEXT', preview: true, content, status: 'PUBLISHED' },
-    update: { title: 'Kenyan flowers reading and grammar notes', chapter: title, kind: 'TEXT', preview: true, content, status: 'PUBLISHED' },
+    create: { id: id('lesson'), course_id: course.id, title: 'Exam preparation', chapter: title, position: 0, kind: 'TEXT', preview: true, content, status: 'PUBLISHED' },
+    update: { title: 'Exam preparation', chapter: title, kind: 'TEXT', preview: true, content, status: 'PUBLISHED' },
   });
   const assessment = await db.assessment.upsert({
     where: { id: id('assessment') },
     create: {
       id: id('assessment'), course_id: course.id, title, kind: 'EXAM',
-      prompt: 'Complete the 46-question Jimma English mid-exam practice set. Questions whose original wording was missing are clearly labeled.',
+      exam_type: 'MID', university: 'Jimma University', campus: 'Jimma Main Campus', department: 'Freshman Program',
+      prompt: examPrompt,
       questions: [], question_bank: bank as Prisma.InputJsonValue, structured: true, published: true,
       chapter: title, passing_percent: 60, review_policy: 'AFTER_SUBMISSION', randomize_questions: false,
       randomize_options: false, allow_navigation: true, allow_resume: true, practice: true,
       revision: 1, max_score: bank.length, max_attempts: 3, results_published: true, allow_files: false,
     },
     update: {
-      course_id: course.id, prompt: 'Complete the 46-question Jimma English mid-exam practice set. Questions whose original wording was missing are clearly labeled.',
+      course_id: course.id, prompt: examPrompt,
+      exam_type: 'MID', university: 'Jimma University', campus: 'Jimma Main Campus', department: 'Freshman Program',
       question_bank: bank as Prisma.InputJsonValue, structured: true, published: true, max_score: bank.length,
     },
   });
