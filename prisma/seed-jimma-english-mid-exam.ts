@@ -82,13 +82,46 @@ for (const item of grammar.conditionals?.questions ?? [])
 
 validateBank(bank, true);
 const title = `Jimma English Mid Exam — ${year} (Set 02)`;
+const readingOverview = (reading.passage_excerpt ?? [])
+  .map((item: AnyRecord) => `### ${item.topic}\n\n${item.text}`)
+  .join('\n\n');
+const readingAnswers = [
+  ...(reading.true_false?.questions ?? []).map(
+    (item: AnyRecord) => `- **${item.number}. ${item.answer ? 'True' : 'False'}** — ${item.statement ?? 'Original statement unavailable in the supplied source.'} ${item.explanation ?? ''}`,
+  ),
+  ...(reading.multiple_choice?.questions ?? []).map(
+    (item: AnyRecord) => `- **${item.number}. ${item.correct_answer}** — ${item.question}`,
+  ),
+].join('\n');
+const referenceAnswers = (reading.reference_questions?.questions ?? [])
+  .map((item: AnyRecord) => `- **${item.number}.** ${item.question ?? 'Original question unavailable.'} **Answer:** ${item.correct_answer}. ${item.explanation ?? ''}`)
+  .join('\n');
+const vocabularyAnswers = (reading.guessing_meaning?.questions ?? [])
+  .map((item: AnyRecord) => `- **${item.number}.** ${Array.isArray(item.answer) ? item.answer.join(', ') : item.answer}`)
+  .join('\n');
+const grammarBlock = [
+  '### Modal verbs',
+  ...(grammar.modal_answers?.questions ?? []).map((item: AnyRecord) => `- **${item.number}.** ${item.answer} — ${item.rule}.`),
+  '### Present perfect and simple past',
+  ...(grammar.present_perfect_and_simple_past?.questions ?? []).map((item: AnyRecord) => `- **${item.number}.** ${item.answer} — ${item.tense ?? ''}.`),
+  '### Conditionals',
+  ...(grammar.conditionals?.questions ?? []).map((item: AnyRecord) => `- **${item.number}.** ${item.answer} — ${item.rule}.`),
+].join('\n');
 const content = [
-  `${reading.title ?? 'Reading: Kenyan Flowers and Environmental Impact'}`,
-  JSON.stringify(reading, null, 2),
-  `${grammar.title ?? 'Grammar'}`,
-  JSON.stringify(grammar, null, 2),
-  'SOURCE LIMITATIONS',
-  JSON.stringify(source.source_limitations ?? {}, null, 2),
+  `# ${reading.title ?? 'Kenyan Flowers and Environmental Impact'}`,
+  '## Reading overview',
+  readingOverview,
+  '## Answer key: reading',
+  readingAnswers,
+  '## Reference questions',
+  referenceAnswers,
+  '## Guessing meaning',
+  vocabularyAnswers,
+  `# ${grammar.title ?? 'Grammar'}`,
+  grammarBlock,
+  '## Source limitations',
+  (source.source_limitations?.missing ?? []).map((item: string) => `- ${item}`).join('\n'),
+  `\n${source.source_limitations?.answer_key ?? ''}`,
 ].join('\n\n');
 
 try {

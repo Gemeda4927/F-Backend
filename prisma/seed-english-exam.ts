@@ -74,7 +74,16 @@ const passage = exam.sections
   .flatMap((section) => section.passage_paragraphs)
   .map((paragraph: SourceQuestion) => `${paragraph.number}. ${paragraph.text}`)
   .join('\n\n');
-const studyGuide = JSON.stringify(exam.study_guide ?? {}, null, 2);
+const studyGuideText = [
+  '## Reading skills',
+  ...(exam.study_guide?.reading_skills ?? []).map(
+    (item: Record<string, string>) => `### ${item.skill}\n\n${item.description}\n\n**Example:** ${item.example}`,
+  ),
+  '## Grammar rules',
+  ...(exam.study_guide?.grammar_rules ?? []).map(
+    (item: Record<string, string>) => `### ${item.topic}\n\n**Structure:** ${item.structure}\n\n**Usage:** ${item.usage}\n\n**Example:** ${item.example}`,
+  ),
+].join('\n\n');
 const courseTitle = `Jimma English Examination — ${year} (Set 01)`;
 
 try {
@@ -119,7 +128,7 @@ try {
       position: 0,
       kind: 'TEXT',
       preview: true,
-      content: `THE DANGERS OF CRAMMING\n\n${passage}\n\nSTUDY GUIDE\n\n${studyGuide}`,
+      content: `# The dangers of cramming\n\n${passage}\n\n# Study guide\n\n${studyGuideText}`,
       status: 'PUBLISHED',
     },
     update: {
@@ -127,7 +136,7 @@ try {
       chapter: 'English Language Examination',
       kind: 'TEXT',
       preview: true,
-      content: `THE DANGERS OF CRAMMING\n\n${passage}\n\nSTUDY GUIDE\n\n${studyGuide}`,
+      content: `# The dangers of cramming\n\n${passage}\n\n# Study guide\n\n${studyGuideText}`,
       status: 'PUBLISHED',
     },
   });
