@@ -93,7 +93,11 @@ class CoursesController {
               b.toString('ascii', 8, 12) === 'WEBP'
             ? 'image/webp'
             : null;
-    if (!mime || mime !== file.mimetype)
+    // Browsers and upload proxies can label a valid image as
+    // application/octet-stream (or another generic MIME type). The file
+    // signature above is the authoritative check; trusting it prevents valid
+    // thumbnails from being rejected before they reach courseThumbnails.
+    if (!mime)
       throw new BadRequestException('Image type must be PNG, JPEG, or WebP');
     return this.service.saveThumbnail(u, id, b, mime);
   }
