@@ -31,7 +31,8 @@
     "db:seed:critical-thinking": "tsx prisma/seed-critical-thinking.ts",
     "db:seed:phil1011-chapter-one": "tsx prisma/seed-phil1011-chapter-one.ts",
     "db:seed:english-exam": "tsx prisma/seed-english-exam.ts",
-    "db:seed:jimma-english-mid": "tsx prisma/seed-jimma-english-mid-exam.ts"
+    "db:seed:jimma-english-mid": "tsx prisma/seed-jimma-english-mid-exam.ts",
+    "db:seed:fallacies": "tsx prisma/seed-fallacies-exam.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
