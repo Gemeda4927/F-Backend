@@ -7,6 +7,12 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { CurrentUser } from '../../common/types.js';
+import {
+  cloudinaryConfigured,
+  deleteCloudinaryImage,
+  fetchCloudinaryImage,
+  uploadCloudinaryImage,
+} from '../../common/cloudinary.js';
 import type { CourseDto } from './courses.dto.js';
 import { notifyCourse } from '../notifications/notifications.js';
 @Injectable()
@@ -215,20 +221,20 @@ export class CoursesService {
         course_id: id,
         course: { visibility: 'PUBLIC', published: true, archived_at: null },
       },
-      select: { content: true, mime_type: true },
+      select: { content: true, mime_type: true, secure_url: true },
     });
     if (!image) throw new NotFoundException('Thumbnail not found');
-    return image;
+    return this.thumbnailResponse(image);
   }
   async authorizedThumbnail(user: CurrentUser, id: string) {
     if (!(await this.canAccess(user, id)))
       throw new NotFoundException('Thumbnail not found');
     const image = await this.db.courseThumbnail.findUnique({
       where: { course_id: id },
-      select: { content: true, mime_type: true },
+      select: { content: true, mime_type: true, secure_url: true },
     });
     if (!image) throw new NotFoundException('Thumbnail not found');
-    return image;
+    return this.thumbnailResponse(image);
   }
   async saveThumbnail(
     user: CurrentUser,
@@ -237,11 +243,26 @@ export class CoursesService {
     mime: string,
   ) {
     await this.assertOwner(user, id);
-    const bytes = Uint8Array.from(content);
+    const cloudinary = cloudinaryConfigured()
+      ? await uploadCloudinaryImage(content, mime, `courses/${id}/thumbnail`)
+      : null;
     await this.db.courseThumbnail.upsert({
       where: { course_id: id },
-      create: { course_id: id, content: bytes, mime_type: mime },
-      update: { content: bytes, mime_type: mime },
+      create: {
+        course_id: id,
+        content: cloudinary ? null : Uint8Array.from(content),
+        mime_type: mime,
+        storage_provider: cloudinary ? 'cloudinary' : 'database',
+        public_id: cloudinary?.public_id,
+        secure_url: cloudinary?.secure_url,
+      },
+      update: {
+        content: cloudinary ? null : Uint8Array.from(content),
+        mime_type: mime,
+        storage_provider: cloudinary ? 'cloudinary' : 'database',
+        public_id: cloudinary?.public_id,
+        secure_url: cloudinary?.secure_url,
+      },
     });
     // Return the persisted course only after the thumbnail row has been
     // committed, so the client can replace its optimistic view with fresh
@@ -250,8 +271,26 @@ export class CoursesService {
   }
   async removeThumbnail(user: CurrentUser, id: string) {
     await this.assertOwner(user, id);
+    const previous = await this.db.courseThumbnail.findUnique({
+      where: { course_id: id },
+      select: { public_id: true, storage_provider: true },
+    });
     await this.db.courseThumbnail.deleteMany({ where: { course_id: id } });
+    if (previous?.storage_provider === 'cloudinary' && previous.public_id)
+      await deleteCloudinaryImage(previous.public_id);
     return { message: 'Thumbnail removed' };
+  }
+  private async thumbnailResponse(image: {
+    content: Uint8Array | null;
+    mime_type: string;
+    secure_url: string | null;
+  }) {
+    return {
+      content: image.secure_url
+        ? await fetchCloudinaryImage(image.secure_url)
+        : Buffer.from(image.content ?? []),
+      mime_type: image.mime_type,
+    };
   }
   async assertOwner(
     user: CurrentUser,

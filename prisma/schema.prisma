@@ -244,8 +244,11 @@ model ContributionCreditConfig {
 
 model CourseThumbnail {
   course_id  String   @id @db.Uuid
-  content    Bytes
+  content    Bytes?
   mime_type  String
+  storage_provider String @default("database")
+  public_id String?
+  secure_url String?
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
   course     Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
 

@@ -191,6 +191,7 @@ No real charge, refund or email is sent by automated tests.
 | SMTP_HOST / SMTP_PORT / SMTP_SECURE | Recovery mail transport; reset links expire after 15 minutes |
 | SMTP_USER / SMTP_PASSWORD / MAIL_FROM | Mail credentials and sender |
 | PRIVATE_STORAGE_DIR | Non-public material storage directory |
+| CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET | Optional server-side Cloudinary storage for course thumbnails |
 | BOOTSTRAP_EMAIL / BOOTSTRAP_PASSWORD | Optional one-time owner seed |
 | TEST_DATABASE_URL | Dedicated disposable security-test database only |
 
@@ -303,7 +304,7 @@ Deploy migration `20261107120000_learning_experience` with `npm run db:deploy`, 
 
 Visibility is independent of publication and archive state. `PUBLIC` courses appear in discovery only when published and not archived. `PRIVATE` and `UNLISTED` courses are excluded from public metadata, catalog, indexing and preview endpoints; an authenticated user with an existing active entitlement can access permitted material through the learning endpoint. Free self-enrollment and checkout are limited to public courses. Owners and administrators can manage course visibility; administrators can grant access explicitly. Existing courses become `PRIVATE` when the visibility migration is applied. Review each course and explicitly select `PUBLIC` before republishing it to discovery; no existing course is made public by migration. Deploy the migration and backend before the frontend, then invalidate any external CDN caches of earlier public course responses. No database reset is required.
 
-Course thumbnails are stored in PostgreSQL, limited to 2 MB, and accepted as PNG, JPEG, or WebP only after MIME and signature checks. Owners or administrators can replace or remove them. The public image endpoint checks publication, archive and visibility on every request; the authenticated endpoint checks course access. Both use `no-store` so changing visibility does not leave an application-managed image cache exposed.
+Course thumbnails are limited to 2 MB and accepted as PNG, JPEG, or WebP only after MIME and signature checks. When `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` are configured, image bytes are uploaded server-side to Cloudinary and PostgreSQL stores the Cloudinary public ID and secure URL. Existing database-backed thumbnails remain readable as a compatibility fallback. Owners or administrators can replace or remove thumbnails. The public image endpoint checks publication, archive and visibility on every request; the authenticated endpoint checks course access. Both use `no-store` so changing visibility does not leave an application-managed image cache exposed.
 
 ## Environment and deployment
 
