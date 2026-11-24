@@ -33,8 +33,6 @@ export function conflictMessage(code: string, meta?: unknown) {
     return 'This content order is already used in this course. Choose a different order and save again.';
   if (names.includes('email'))
     return 'An account with this email already exists. Sign in or use another email address.';
-  if (names.includes('device') || names.includes('one_registered_device'))
-    return 'This account already has a registered device. Use that device or ask an administrator to reset it.';
   if (names.includes('enrollment'))
     return 'You are already enrolled in this course. Open My learning to continue.';
   if (

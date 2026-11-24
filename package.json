@@ -32,6 +32,7 @@
     "db:seed:introduction-to-ai": "tsx prisma/seed-introduction-to-ai.ts",
     "db:seed:ai-chapter-one": "tsx prisma/seed-ai-chapter-one.ts",
     "db:seed:ai-outline": "tsx prisma/seed-ai-course-outline.ts",
+    "db:seed:flutter-complete": "tsx prisma/seed-flutter-complete-course.ts",
     "db:seed:phil1011-chapter-one": "tsx prisma/seed-phil1011-chapter-one.ts",
     "db:seed:english-exam": "tsx prisma/seed-english-exam.ts",
     "db:seed:jimma-english-mid": "tsx prisma/seed-jimma-english-mid-exam.ts",

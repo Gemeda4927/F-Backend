@@ -61,10 +61,7 @@ try {
               where: { user_id: existing.id, revoked_at: null },
               data: { revoked_at: new Date() },
             });
-            await tx.studentDevice.updateMany({
-              where: { user_id: existing.id, revoked_at: null },
-              data: { revoked_at: new Date() },
-            });
+            await tx.fcmToken.deleteMany({ where: { user_id: existing.id } });
             console.log('Updated instructor account: ' + account.email);
           } else if (existing.role !== account.role)
             throw Error('Existing account role mismatch: ' + account.email);

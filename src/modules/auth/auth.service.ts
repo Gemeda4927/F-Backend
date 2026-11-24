@@ -32,7 +32,7 @@ export class AuthService {
     if (Buffer.byteLength(password, 'utf8') > 72)
       throw new BadRequestException('Password must be at most 72 UTF-8 bytes');
   }
-  async register(dto: RegisterDto, device: string | undefined, agent: string) {
+  async register(dto: RegisterDto, agent: string) {
     this.passwordValid(dto.password);
     await this.db.atomic(async (tx) => {
       const user = await tx.user.create({
@@ -50,7 +50,7 @@ export class AuthService {
         description: 'Student account created.',
       });
     });
-    return this.login(dto, device, agent);
+    return this.login(dto, agent);
   }
   private tokens(user: DbUser, sessionId: string) {
     const common = {
@@ -71,7 +71,7 @@ export class AuthService {
       ),
     };
   }
-  async login(dto: LoginDto, deviceCookie: string | undefined, agent: string) {
+  async login(dto: LoginDto, _agent: string) {
     const found = await this.db.user.findUnique({
       where: { email: dto.email.toLowerCase().trim() },
     });
@@ -87,118 +87,7 @@ export class AuthService {
         });
       throw new UnauthorizedException('Invalid email or password');
     }
-    return this.db.atomic(async (tx) => {
-      // A row update serializes login, device reset and recovery without raw locking SQL.
-      const user = await tx.user.update({
-        where: { id: found.id },
-        data: { auth_version: { increment: 1 }, last_login_at: new Date() },
-      });
-      if (!user.active || user.password_hash !== found.password_hash)
-        throw new UnauthorizedException('Please try signing in again');
-      let deviceId: string | null = null,
-        deviceToken = deviceCookie;
-      if (user.role === 'STUDENT') {
-        const installationHash = dto.installation_id
-          ? digest(dto.installation_id)
-          : undefined;
-        if (deviceToken) {
-          const trusted = await tx.studentDevice.findFirst({
-            where: { token_hash: digest(deviceToken), revoked_at: null },
-          });
-          // A browser cookie belongs to one account at a time, not to the
-          // browser itself. When accounts are switched, issue a fresh token
-          // for the newly authenticated account instead of blocking login.
-          if (!trusted || trusted.user_id !== user.id) deviceToken = undefined;
-        }
-
-        const active = await tx.studentDevice.findMany({
-          where: { user_id: user.id, revoked_at: null },
-        });
-        const presentedTokenHash = deviceToken
-          ? digest(deviceToken)
-          : undefined;
-        const existing = active.find(
-          (device) => device.token_hash === presentedTokenHash,
-        );
-        const installation = installationHash
-          ? active.find(
-              (device) => device.installation_hash === installationHash,
-            )
-          : undefined;
-        const currentDevice = existing ?? installation;
-        if (currentDevice) {
-          const nextToken = existing
-            ? deviceToken!
-            : randomBytes(32).toString('hex');
-          deviceToken = nextToken;
-          deviceId = currentDevice.id;
-          await tx.studentDevice.update({
-            where: { id: currentDevice.id },
-            data: {
-              last_seen_at: new Date(),
-              token_hash: digest(nextToken),
-              ...(installationHash
-                ? { installation_hash: installationHash }
-                : {}),
-            },
-          });
-        } else {
-          deviceToken = randomBytes(32).toString('hex');
-          const device = await tx.studentDevice.create({
-            data: {
-              user_id: user.id,
-              token_hash: digest(deviceToken),
-              installation_hash: installationHash,
-              label: agent.slice(0, 200) || 'Registered browser',
-            },
-          });
-          deviceId = device.id;
-          await audit(tx, {
-            actor: {
-              id: user.id,
-              name: user.name,
-              role: user.role as CurrentUser['role'],
-            },
-            target: user.id,
-            action: 'DEVICE_REGISTERED',
-            description: 'Learning browser registered.',
-            resourceType: 'DEVICE',
-            resourceId: device.id,
-          });
-        }
-      }
-      await tx.authSession.updateMany({
-        where: {
-          user_id: user.id,
-          revoked_at: null,
-          ...(user.role === 'STUDENT' ? { device_id: deviceId } : {}),
-        },
-        data: { revoked_at: new Date() },
-      });
-      const id = randomUUID(),
-        tokens = this.tokens(user, id);
-      await tx.authSession.create({
-        data: {
-          id,
-          user_id: user.id,
-          device_id: deviceId,
-          refresh_hash: digest(tokens.refresh),
-          expires_at: new Date(Date.now() + 30 * 86400000),
-        },
-      });
-      await audit(tx, {
-        actor: {
-          id: user.id,
-          name: user.name,
-          role: user.role as CurrentUser['role'],
-        },
-        target: user.id,
-        action: 'LOGIN_SUCCEEDED',
-        description:
-          'Signed in successfully; previous sessions on this authorized installation replaced.',
-      });
-      return { ...tokens, device: deviceToken, user: publicUser(user) };
-    });
+    return this.loginUserById(found.id);
   }
   googleStart(linkUserId?: string) {
     const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -222,7 +111,7 @@ export class AuthService {
       }),
     };
   }
-  async currentGoogleLinkUser(accessToken?: string, deviceCookie?: string) {
+  async currentGoogleLinkUser(accessToken?: string) {
     if (!accessToken) return undefined;
     try {
       const claims = jwt.verify(accessToken, process.env.JWT_ACCESS_SECRET!, {
@@ -238,16 +127,9 @@ export class AuthService {
           expires_at: { gt: new Date() },
           user: { active: true },
         },
-        include: { studentDevice: true, user: true },
+        include: { user: true },
       });
       if (!session) return undefined;
-      if (
-        session.user.role === 'STUDENT' &&
-        (!session.studentDevice ||
-          !deviceCookie ||
-          session.studentDevice.token_hash !== digest(deviceCookie))
-      )
-        return undefined;
       return session.user.id;
     } catch {
       return undefined;
@@ -259,7 +141,6 @@ export class AuthService {
     expectedState: string | undefined,
     nonce: string | undefined,
     intent: string | undefined,
-    deviceCookie: string | undefined,
     agent: string,
     currentUserId?: string,
   ) {
@@ -330,7 +211,7 @@ export class AuthService {
     if (providerAccount) {
       if (!providerAccount.user.active)
         throw new UnauthorizedException('This account is inactive');
-      return this.loginUserById(providerAccount.user.id, deviceCookie, agent);
+      return this.loginUserById(providerAccount.user.id);
     }
     const emailUser = await this.db.user.findUnique({
       where: { email: payload.email.toLowerCase() },
@@ -366,13 +247,9 @@ export class AuthService {
       });
       return created;
     });
-    return this.loginUserById(user.id, deviceCookie, agent);
+    return this.loginUserById(user.id);
   }
-  private async loginUserById(
-    userId: string,
-    deviceCookie: string | undefined,
-    agent: string,
-  ) {
+  private async loginUserById(userId: string) {
     const found = await this.db.user.findUnique({ where: { id: userId } });
     if (!found || !found.active)
       throw new UnauthorizedException('This account is inactive');
@@ -381,62 +258,8 @@ export class AuthService {
         where: { id: found.id },
         data: { auth_version: { increment: 1 }, last_login_at: new Date() },
       });
-      let deviceId: string | null = null,
-        deviceToken = deviceCookie;
-      if (user.role === 'STUDENT') {
-        if (deviceToken) {
-          const trusted = await tx.studentDevice.findFirst({
-            where: { token_hash: digest(deviceToken), revoked_at: null },
-          });
-          if (!trusted || trusted.user_id !== user.id) deviceToken = undefined;
-        }
-        const active = await tx.studentDevice.findMany({
-          where: { user_id: user.id, revoked_at: null },
-        });
-        const existing = active.find(
-          (device) =>
-            device.token_hash ===
-            (deviceToken ? digest(deviceToken) : undefined),
-        );
-        const currentDevice = existing;
-        if (currentDevice) {
-          const nextToken = deviceToken!;
-          deviceToken = nextToken;
-          deviceId = currentDevice.id;
-          await tx.studentDevice.update({
-            where: { id: currentDevice.id },
-            data: { last_seen_at: new Date(), token_hash: digest(nextToken) },
-          });
-        } else {
-          deviceToken = randomBytes(32).toString('hex');
-          const device = await tx.studentDevice.create({
-            data: {
-              user_id: user.id,
-              token_hash: digest(deviceToken),
-              label: agent.slice(0, 200) || 'Registered browser',
-            },
-          });
-          deviceId = device.id;
-          await audit(tx, {
-            actor: {
-              id: user.id,
-              name: user.name,
-              role: user.role as CurrentUser['role'],
-            },
-            target: user.id,
-            action: 'DEVICE_REGISTERED',
-            description: 'Learning browser registered.',
-            resourceType: 'DEVICE',
-            resourceId: device.id,
-          });
-        }
-      }
       await tx.authSession.updateMany({
-        where: {
-          user_id: user.id,
-          revoked_at: null,
-          ...(user.role === 'STUDENT' ? { device_id: deviceId } : {}),
-        },
+        where: { user_id: user.id, revoked_at: null },
         data: { revoked_at: new Date() },
       });
       const id = randomUUID(),
@@ -445,7 +268,6 @@ export class AuthService {
         data: {
           id,
           user_id: user.id,
-          device_id: deviceId,
           refresh_hash: digest(tokens.refresh),
           expires_at: new Date(Date.now() + 30 * 86400000),
         },
@@ -458,12 +280,12 @@ export class AuthService {
         },
         target: user.id,
         action: 'LOGIN_SUCCEEDED',
-        description: 'Signed in successfully with Google.',
+        description: 'Signed in successfully.',
       });
-      return { ...tokens, device: deviceToken, user: publicUser(user) };
+      return { ...tokens, user: publicUser(user) };
     });
   }
-  async refresh(token?: string, deviceCookie?: string) {
+  async refresh(token?: string) {
     if (!token) throw new UnauthorizedException('Refresh session missing');
     let claims: jwt.JwtPayload;
     try {
@@ -478,7 +300,7 @@ export class AuthService {
     const result = await this.db.atomic(async (tx) => {
       const session = await tx.authSession.findFirst({
         where: { id: claims.sid, user_id: claims.sub },
-        include: { user: true, studentDevice: true },
+        include: { user: true },
       });
       if (!session || session.revoked_at || session.expires_at <= new Date())
         return null;
@@ -489,27 +311,14 @@ export class AuthService {
         });
         return null;
       }
-      const user = session.user,
-        device = session.studentDevice;
-      if (
-        !user.active ||
-        (user.role === 'STUDENT' &&
-          (!deviceCookie ||
-            !device ||
-            device.revoked_at ||
-            device.token_hash !== digest(deviceCookie)))
-      )
+      const user = session.user;
+      if (!user.active)
         return null;
       const tokens = this.tokens(user, session.id);
       await tx.authSession.update({
         where: { id: session.id },
         data: { refresh_hash: digest(tokens.refresh) },
       });
-      if (device)
-        await tx.studentDevice.update({
-          where: { id: device.id },
-          data: { last_seen_at: new Date() },
-        });
       return { ...tokens, user: publicUser(user) };
     });
     if (!result)
@@ -522,6 +331,7 @@ export class AuthService {
         where: { id: user.sessionId },
         data: { revoked_at: new Date() },
       });
+      await tx.fcmToken.deleteMany({ where: { user_id: user.id } });
       await audit(tx, {
         actor: user,
         target: user.id,
@@ -595,19 +405,15 @@ export class AuthService {
         where: { user_id: reset.user_id, revoked_at: null },
         data: { revoked_at: new Date() },
       });
-      await tx.studentDevice.updateMany({
-        where: { user_id: reset.user_id, revoked_at: null },
-        data: { revoked_at: new Date() },
-      });
       await audit(tx, {
         target: reset.user_id,
         action: 'PASSWORD_RECOVERY',
         description:
-          'Password recovered; device registration and sessions revoked.',
+        'Password recovered; all existing sessions revoked.',
       });
     });
     return {
-      message: 'Password reset. Sign in to register your current browser.',
+      message: 'Password reset. Sign in again to create a new session.',
     };
   }
   async validateReset(token: string) {

@@ -26,12 +26,11 @@ export class StudentsService {
     const [rows, total] = await this.db.$transaction([
       this.db.user.findMany({ where, select: { ...profile,
         _count: { select: { enrollments: true } },
-        devices: { where: { revoked_at: null }, select: { id: true }, take: 1 },
       }, orderBy: [{ [q.sort]: q.direction }, { id: 'asc' }], ...paging(q) }),
       this.db.user.count({ where }),
     ], { isolationLevel: 'RepeatableRead' });
     const payments = await this.db.payment.groupBy({ by: ['user_id', 'currency'], where: { user_id: { in: rows.map(r => r.id) }, status: 'SUCCEEDED', mode: 'live' }, _sum: { amount_minor: true }, _count: true });
-    return envelope(rows.map(({ devices, _count, ...u }) => ({ ...u, status: accountStatus(u), course_count: _count.enrollments, device_registered: devices.length > 0,
+    return envelope(rows.map(({ _count, ...u }) => ({ ...u, status: accountStatus(u), course_count: _count.enrollments,
       verified_payments: payments.filter(p => p.user_id === u.id).map(p => ({ currency: p.currency, amount_minor: p._sum.amount_minor ?? 0, count: p._count })),
     })), total, q);
   }
@@ -69,7 +68,7 @@ export class StudentsService {
       await this.student(id, tx);
       await tx.user.update({ where: { id }, data: { auth_version: { increment: 1 } } });
       const result = await tx.authSession.updateMany({ where: { user_id: id, revoked_at: null }, data: { revoked_at: new Date() } });
-      await audit(tx, { actor, target: id, action: 'SESSIONS_REVOKED', description: 'All existing sessions revoked; device registration retained.', reason, newValues: { revoked_sessions: result.count } });
+      await audit(tx, { actor, target: id, action: 'SESSIONS_REVOKED', description: 'All existing sessions revoked.', reason, newValues: { revoked_sessions: result.count } });
       return { message: 'Sessions revoked.' };
     });
   }
@@ -99,16 +98,6 @@ export class StudentsService {
     // Verification time is supplied by an actual verification audit event, never inferred from updated_at.
     const events = await this.db.auditLog.findMany({ where: { target_id: id, action: 'PAYMENT_VERIFIED', resource_id: { in: items.map(p => p.id) } }, select: { resource_id: true, created_at: true } });
     return envelope(items.map(p => ({ ...p, provider: 'Chapa', verified_at: events.find(e => e.resource_id === p.id)?.created_at ?? null })), total, q);
-  }
-  async devices(id: string, q: PageDto) {
-    await this.student(id);
-    const [items, total, sessions, sessionTotal] = await this.db.$transaction([
-      this.db.studentDevice.findMany({ where: { user_id: id }, ...paging(q), orderBy: [{ registered_at: 'desc' }, { id: 'asc' }], select: { id: true, label: true, registered_at: true, last_seen_at: true, revoked_at: true } }),
-      this.db.studentDevice.count({ where: { user_id: id } }),
-      this.db.authSession.findMany({ where: { user_id: id }, ...paging(q), orderBy: [{ created_at: 'desc' }, { id: 'asc' }], select: { id: true, device_id: true, created_at: true, expires_at: true, revoked_at: true } }),
-      this.db.authSession.count({ where: { user_id: id } }),
-    ]);
-    return { ...envelope(items, total, q), sessions: envelope(sessions.map(s => ({ ...s, active: !s.revoked_at && s.expires_at > new Date() })), sessionTotal, q) };
   }
   async logs(q: PageDto, id?: string) {
     if (id) await this.student(id);

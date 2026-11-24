@@ -23,7 +23,7 @@ describe('payment security', () => {
   it('enforces the role permission matrix', () => {
     expect(hasPermission('STUDENT', 'courses:write')).toBe(false);
     expect(hasPermission('INSTRUCTOR', 'courses:write')).toBe(true);
-    expect(hasPermission('INSTRUCTOR', 'devices:reset')).toBe(false);
+    expect(hasPermission('INSTRUCTOR', 'users:manage')).toBe(false);
     expect(hasPermission('ADMIN', 'roles:manage')).toBe(false);
     expect(hasPermission('SUPER_ADMIN', 'roles:manage')).toBe(true);
   });

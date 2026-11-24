@@ -20,7 +20,6 @@ export async function seedConfiguration(db: PrismaClient) {
   const permissions: Permission[] = [
     'users:manage',
     'roles:manage',
-    'devices:reset',
     'courses:write',
     'payments:review',
     'payments:refund',

@@ -21,7 +21,6 @@ describe('AuthService password recovery', () => {
       },
       user: { update: vi.fn().mockResolvedValue({}) },
       authSession: { updateMany: vi.fn().mockResolvedValue({}) },
-      studentDevice: { updateMany: vi.fn().mockResolvedValue({}) },
       auditLog: { create: vi.fn().mockResolvedValue({}) },
     };
     db = {

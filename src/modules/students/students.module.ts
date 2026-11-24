@@ -4,14 +4,13 @@ import { Permissions, User } from '../../common/decorators/permissions.js';
 import type { CurrentUser } from '../../common/types.js';
 import { StudentsService } from './students.service.js';
 import { PageDto, StudentAccessDto, StudentProfileDto, StudentReasonDto, StudentStatusDto } from './students.dto.js';
-import { DevicesModule, DevicesService } from '../devices/devices.module.js';
 import { AdminRecordsController } from './admin-records.controller.js';
 
 @ApiTags('Super Admin students') @ApiCookieAuth('access_token')
 @Permissions('users:manage', 'roles:manage')
 @Controller('admin')
 export class StudentsController {
-  constructor(private readonly students: StudentsService, private readonly devices: DevicesService) {}
+  constructor(private readonly students: StudentsService) {}
   @Get('students') @ApiOperation({ summary: 'Search and paginate student accounts' })
   list(@Query() q: PageDto) { return this.students.list(q); }
   @Get('audit-logs') @ApiOperation({ summary: 'Read immutable platform audit history' })
@@ -30,14 +29,10 @@ export class StudentsController {
   payments(@Param('id', ParseUUIDPipe) id: string, @Query() q: PageDto) { return this.students.payments(id, q); }
   @Get('students/:id/audit-logs') @ApiOperation({ summary: 'Paginate student audit history' })
   studentLogs(@Param('id', ParseUUIDPipe) id: string, @Query() q: PageDto) { return this.students.logs(q, id); }
-  @Get('students/:id/devices') @ApiOperation({ summary: 'Paginate safe device and session metadata' })
-  registered(@Param('id', ParseUUIDPipe) id: string, @Query() q: PageDto) { return this.students.devices(id, q); }
-  @Post('students/:id/devices/reset') @Permissions('roles:manage', 'devices:reset') @ApiOperation({ summary: 'Reset device and revoke sessions with a required reason' })
-  reset(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: StudentReasonDto) { return this.devices.reset(u, id, dto.reason); }
-  @Post('students/:id/sessions/revoke') @ApiOperation({ summary: 'Revoke all existing sessions, retaining device registration' })
+  @Post('students/:id/sessions/revoke') @ApiOperation({ summary: 'Revoke all existing sessions' })
   sessions(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: StudentReasonDto) { return this.students.revokeSessions(u, id, dto.reason); }
   @Post('students/:id/access') @Permissions('roles:manage', 'access:revoke') @ApiOperation({ summary: 'Explicit audited course access grant or revocation; never changes payments' })
   access(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: StudentAccessDto) { return this.students.access(u, id, dto); }
 }
-@Module({ imports: [DevicesModule], controllers: [StudentsController, AdminRecordsController], providers: [StudentsService] })
+@Module({ controllers: [StudentsController, AdminRecordsController], providers: [StudentsService] })
 export class StudentsModule {}

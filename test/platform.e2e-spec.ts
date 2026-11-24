@@ -134,7 +134,7 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       db.course.deleteMany(),
       db.passwordResetToken.deleteMany(),
       db.authSession.deleteMany(),
-      db.studentDevice.deleteMany(),
+      db.fcmToken.deleteMany(),
       db.user.deleteMany(),
     ]);
     await seedConfiguration(db);
@@ -240,12 +240,12 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
     expect(
       [
         {
-          count: await db.studentDevice.count({
-            where: { user: { email: 'race@freshman.test' }, revoked_at: null },
+          count: await db.fcmToken.count({
+            where: { user: { email: 'race@freshman.test' } },
           }),
         },
       ][0].count,
-    ).toBe(2);
+    ).toBe(0);
   });
   it('rotates refresh sessions and rejects replayed refresh tokens', async () => {
     const agent = request.agent(app.getHttpServer());
@@ -1085,28 +1085,6 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       '/lessons/course/' + courseId + '/manage',
     ).expect(403);
   });
-  it('admin device reset revokes old sessions without losing purchases', async () => {
-    await call(
-      agents.STUDENT,
-      'post',
-      '/devices/student/' + ids.STUDENT + '/reset',
-    )
-      .send({ reason: 'Malicious reset' })
-      .expect(403);
-    await call(
-      agents.ADMIN,
-      'post',
-      '/devices/student/' + ids.STUDENT + '/reset',
-    )
-      .send({ reason: 'Verified identity recovery' })
-      .expect(201);
-    await call(agents.STUDENT, 'get', '/auth/me').expect(401);
-    agents.STUDENT = request.agent(app.getHttpServer());
-    await call(agents.STUDENT, 'post', '/auth/login')
-      .send({ email: 'student@freshman.test', password })
-      .expect(200);
-    await call(agents.STUDENT, 'get', '/lessons/' + lessonId).expect(200);
-  });
   it('password recovery is one-time and revokes all old device sessions', async () => {
     await call(agents.STUDENT, 'post', '/auth/forgot-password')
       .send({ email: 'student@freshman.test' })
@@ -1222,35 +1200,12 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       entitlements: await db.courseEntitlement.findMany({
         orderBy: { id: 'asc' },
       }),
-      devices: await db.studentDevice.findMany({ orderBy: { id: 'asc' } }),
+      fcmTokens: await db.fcmToken.findMany({ orderBy: { id: 'asc' } }),
     });
     const before = await snapshot();
     await seedConfiguration(db);
     await seedConfiguration(db);
     expect(await snapshot()).toEqual(before);
-  });
-  it('checks granular permissions from PostgreSQL rather than a hardcoded role grant', async () => {
-    await db.rolePermission.delete({
-      where: {
-        role_id_permission_code: {
-          role_id: 'ADMIN',
-          permission_code: 'devices:reset',
-        },
-      },
-    });
-    try {
-      await call(
-        agents.ADMIN,
-        'post',
-        '/devices/student/' + ids.STUDENT + '/reset',
-      )
-        .send({ reason: 'Denied after permission removal' })
-        .expect(403);
-    } finally {
-      await db.rolePermission.create({
-        data: { role_id: 'ADMIN', permission_code: 'devices:reset' },
-      });
-    }
   });
   describe('Super Admin student administration', () => {
     let studentId = '',
@@ -1385,23 +1340,6 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         .send({ reason: 'Verified session security review' })
         .expect(201);
       await call(student, 'get', '/auth/me').expect(401);
-      expect(
-        await db.studentDevice.count({
-          where: { user_id: studentId, revoked_at: null },
-        }),
-      ).toBe(1);
-      await call(
-        agents.SUPER_ADMIN,
-        'post',
-        '/admin/students/' + studentId + '/devices/reset',
-      )
-        .send({ reason: 'Student replacing registered browser' })
-        .expect(201);
-      expect(
-        await db.studentDevice.count({
-          where: { user_id: studentId, revoked_at: null },
-        }),
-      ).toBe(0);
     });
     it('grants and revokes explicit access without inventing or changing payments', async () => {
       const student = request.agent(app.getHttpServer());
@@ -1512,7 +1450,6 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         'courses',
         'payments',
         'progress',
-        'devices',
         'audit-logs',
       ]) {
         const result = await call(
@@ -1537,7 +1474,6 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       for (const path of [
         '/admin/records/enrollments',
         '/admin/records/progress',
-        '/admin/records/devices',
         '/admin/revenue',
         '/admin/settings',
       ])
@@ -2362,78 +2298,6 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
       `/assessments/images/${image.body.id}`,
     ).expect(403);
   }, 60000);
-  it('binds installation identity independently of refreshed FCM tokens and revokes access after reset', async () => {
-    process.env.PUSH_TOKEN_ENCRYPTION_KEY = 'b'.repeat(64);
-    const install = randomUUID(),
-      first = request.agent(app.getHttpServer()),
-      second = request.agent(app.getHttpServer());
-    const email = `device-${randomUUID()}@freshman.test`;
-    await call(first, 'post', '/auth/register')
-      .send({
-        email,
-        password,
-        name: 'Device learner',
-        installation_id: install,
-      })
-      .expect(201);
-    const registration = {
-      installation_id: install,
-      browser: 'Test browser',
-      operating_system: 'Test OS',
-      fcm_token: 'test-fcm-registration-token-one',
-    };
-    await call(first, 'post', '/devices/me/register')
-      .send(registration)
-      .expect(201);
-    const before = await call(first, 'get', '/devices/me').expect(200);
-    expect(JSON.stringify(before.body)).not.toContain('test-fcm');
-    expect(before.body).not.toHaveProperty('installation_hash');
-    await call(first, 'post', '/devices/me/register')
-      .send({ ...registration, fcm_token: 'test-fcm-registration-token-two' })
-      .expect(201);
-    const after = await call(first, 'get', '/devices/me').expect(200);
-    expect(after.body.id).toBe(before.body.id);
-    const stored = await db.studentDevice.findUniqueOrThrow({
-      where: { id: before.body.id },
-    });
-    expect(stored.fcm_token_encrypted).not.toContain('test-fcm');
-    await call(second, 'post', '/auth/login')
-      .send({ email, password, installation_id: install })
-      .expect(409);
-    await call(first, 'post', '/devices/me/register')
-      .send({ ...registration, installation_id: randomUUID() })
-      .expect(409);
-    const target = await db.user.findUniqueOrThrow({ where: { email } });
-    await call(first, 'post', '/devices/me/change-request')
-      .send({ reason: 'Replacing a damaged learning installation' })
-      .expect(201);
-    await call(first, 'post', '/devices/me/change-request')
-      .send({ reason: 'Replacing a damaged learning installation' })
-      .expect(201);
-    const requests = await call(
-      agents.SUPER_ADMIN,
-      'get',
-      '/devices/requests',
-    ).expect(200);
-    expect(
-      requests.body.filter(
-        (row: { student_id: string }) => row.student_id === target.id,
-      ),
-    ).toHaveLength(1);
-    await call(first, 'get', '/auth/me').expect(200);
-    await call(
-      agents.SUPER_ADMIN,
-      'post',
-      `/devices/student/${target.id}/reset`,
-    )
-      .send({ reason: 'Verified administrative device recovery' })
-      .expect(201);
-    await call(first, 'get', '/auth/me').expect(401);
-    await call(second, 'post', '/auth/login')
-      .send({ email, password, installation_id: randomUUID() })
-      .expect(200);
-    delete process.env.PUSH_TOKEN_ENCRYPTION_KEY;
-  });
   it('transfers course ownership only through Super Admin and immediately changes management scope', async () => {
     const owner = await db.user.create({
       data: {
@@ -2496,35 +2360,6 @@ describe.runIf(enabled)('PostgreSQL security integration', () => {
         (row: { currency: string }) => row.currency === 'ETB',
       )?.amount_minor ?? 0,
     ).toBe(expected._sum.amount_minor ?? 0);
-  });
-  it('allows additional browsers without revoking existing authenticated sessions', async () => {
-    process.env.MAX_ACTIVE_STUDENT_DEVICES = '2';
-    try {
-      const email = `multi-${randomUUID()}@freshman.test`;
-      const first = request.agent(app.getHttpServer()),
-        second = request.agent(app.getHttpServer()),
-        third = request.agent(app.getHttpServer());
-      await call(first, 'post', '/auth/register')
-        .send({
-          email,
-          password,
-          name: 'Two-installation learner',
-          installation_id: randomUUID(),
-        })
-        .expect(201);
-      await call(second, 'post', '/auth/login')
-        .send({ email, password, installation_id: randomUUID() })
-        .expect(200);
-      await call(first, 'get', '/auth/me').expect(200);
-      const a = await call(first, 'get', '/devices/me').expect(200),
-        b = await call(second, 'get', '/devices/me').expect(200);
-      expect(a.body.id).not.toBe(b.body.id);
-      await call(third, 'post', '/auth/login')
-        .send({ email, password, installation_id: randomUUID() })
-        .expect(200);
-    } finally {
-      process.env.MAX_ACTIVE_STUDENT_DEVICES = '1';
-    }
   });
   it('converts a student to instructor and back without losing learning or owned course records', async () => {
     const id = randomUUID(),

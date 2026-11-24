@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
-import { createHash } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { AuthRequest, Role } from '../types.js';
 import type { Permission } from '../../modules/roles/permissions.js';
@@ -42,27 +41,13 @@ export class AuthGuard implements CanActivate {
           user: { active: true },
         },
         include: {
-          studentDevice: true,
           user: {
             include: { roleDefinition: { include: { permissions: true } } },
           },
         },
       });
       if (!session) throw Error('Session revoked');
-      const user = session.user,
-        device = session.studentDevice;
-      if (
-        user.role === 'STUDENT' &&
-        (!device ||
-          device.revoked_at ||
-          !req.cookies?.device_token ||
-          createHash('sha256')
-            .update(req.cookies.device_token)
-            .digest('hex') !== device.token_hash)
-      )
-        throw Error('Device revoked');
-      if (device && device.last_seen_at.getTime() < Date.now() - 300000)
-        await this.db.studentDevice.updateMany({ where: { id: device.id, revoked_at: null }, data: { last_seen_at: new Date() } });
+      const user = session.user;
       if (!user.roleDefinition || user.roleDefinition.name !== user.role)
         throw Error('Role configuration missing');
       grants = user.roleDefinition.permissions.map((p) => p.permission_code);

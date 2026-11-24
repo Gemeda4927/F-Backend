@@ -12,7 +12,7 @@ import {
 } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { decryptPushToken } from '../devices/push-token.js';
+import { decryptPushToken } from '../push-tokens/push-token.js';
 @Injectable()
 export class PushWorker
   implements OnApplicationBootstrap, OnApplicationShutdown
@@ -93,23 +93,18 @@ export class PushWorker
               },
             },
           }));
-        const devices = allowed
-          ? await this.db.studentDevice.findMany({
+        const tokens = allowed
+          ? await this.db.fcmToken.findMany({
               where: {
                 user_id: notice.user_id,
-                revoked_at: null,
-                fcm_token_encrypted: { not: null },
-                sessions: {
-                  some: { revoked_at: null, expires_at: { gt: new Date() } },
-                },
               },
             })
           : [];
         let retry = false;
-        for (const device of devices) {
+        for (const token of tokens) {
           try {
             await getMessaging(app).send({
-              token: decryptPushToken(device.fcm_token_encrypted!),
+              token: decryptPushToken(token.token_encrypted),
               data: { notification_id: notice.id, href: '/notifications' },
               webpush: { headers: { TTL: '300' } },
             });
@@ -119,14 +114,7 @@ export class PushWorker
               code === 'messaging/registration-token-not-registered' ||
               code === 'messaging/invalid-registration-token'
             )
-              await this.db.studentDevice.updateMany({
-                where: { id: device.id, fcm_token_hash: device.fcm_token_hash },
-                data: {
-                  fcm_token_encrypted: null,
-                  fcm_token_hash: null,
-                  push_updated_at: null,
-                },
-              });
+              await this.db.fcmToken.deleteMany({ where: { id: token.id, token_hash: token.token_hash } });
             else retry = true;
           }
         }

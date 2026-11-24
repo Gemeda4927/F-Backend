@@ -59,9 +59,9 @@ model User {
   last_login_at  DateTime?             @db.Timestamptz(6)
   auth_version   Int                  @default(0)
   created_at     DateTime             @default(now()) @db.Timestamptz(6)
-  devices        StudentDevice[]
   sessions       AuthSession[]
   providerAccounts AuthProviderAccount[]
+  fcmTokens      FcmToken[]
   resets         PasswordResetToken[]
   courses        Course[]
   payments       Payment[]
@@ -128,43 +128,32 @@ model RolePermission {
   @@map("role_permissions")
 }
 
-model StudentDevice {
-  @@index([user_id], map: "devices_active_user", where: { revoked_at: null })
-  installation_hash String?
-  fcm_token_encrypted String?
-  fcm_token_hash String?
-  platform String @default("web")
-  browser String?
-  operating_system String?
-  push_updated_at DateTime? @db.Timestamptz(6)
-  @@unique([fcm_token_hash], map: "one_active_fcm_registration", where: { revoked_at: null })
-  @@unique([installation_hash], map: "one_active_installation", where: { revoked_at: null })
-  id            String        @id @default(uuid()) @db.Uuid
-  user_id       String        @db.Uuid
-  token_hash    String        @unique
-  label         String
-  registered_at DateTime      @default(now()) @db.Timestamptz(6)
-  last_seen_at  DateTime      @default(now()) @db.Timestamptz(6)
-  revoked_at    DateTime?     @db.Timestamptz(6)
-  user          User          @relation(fields: [user_id], references: [id], onDelete: Restrict)
-  sessions      AuthSession[]
-
-  @@map("devices")
-}
-
 model AuthSession {
   id            String         @id @default(uuid()) @db.Uuid
   user_id       String         @db.Uuid
-  device_id     String?        @db.Uuid
   refresh_hash  String
   expires_at    DateTime       @db.Timestamptz(6)
   revoked_at    DateTime?      @db.Timestamptz(6)
   created_at    DateTime       @default(now()) @db.Timestamptz(6)
   user          User           @relation(fields: [user_id], references: [id], onDelete: Restrict)
-  studentDevice StudentDevice? @relation(fields: [device_id], references: [id], onDelete: Restrict)
 
   @@index([user_id], map: "sessions_user")
   @@map("sessions")
+}
+
+model FcmToken {
+  id                String   @id @default(uuid()) @db.Uuid
+  user_id           String   @db.Uuid
+  token_encrypted   String
+  token_hash        String   @unique
+  permission_status String   @default("granted")
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime @updatedAt @db.Timestamptz(6)
+  last_seen_at      DateTime @default(now()) @db.Timestamptz(6)
+  user              User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("fcm_tokens")
 }
 
 model PasswordResetToken {

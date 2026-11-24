@@ -21,7 +21,7 @@ export class AdminRecordsController {
       payment_access: 'Server-verified payment or explicit audited administrative grant',
     };
   }
-  @Get('records/:kind') @ApiOperation({ summary: 'Paginate enrollments, learning progress or registered devices' })
+  @Get('records/:kind') @ApiOperation({ summary: 'Paginate enrollments or learning progress' })
   async records(@Param('kind') kind: string, @Query() q: PageDto) {
     const paging = { skip: (q.page - 1) * q.pageSize, take: q.pageSize };
     if (kind === 'enrollments' || kind === 'progress') {
@@ -33,14 +33,6 @@ export class AdminRecordsController {
       return { items: rows.map(r => ({ id: r.id, student_id: r.user_id, student_name: r.user.name, title: r.course.title, status: r.status,
         detail: kind === 'progress' ? `${completed.filter(p => p.user_id === r.user_id && p.lesson.course_id === r.course.id).length} / ${r.course._count.lessons} lessons completed` : `Entitlement: ${r.entitlement?.state ?? 'NONE'}`,
         created_at: r.created_at })), total, page: q.page, pageSize: q.pageSize };
-    }
-    if (kind === 'devices') {
-      const where = { user: { OR: [{ name: { contains: q.search, mode: 'insensitive' as const } }, { email: { contains: q.search, mode: 'insensitive' as const } }] } };
-      const [rows, total] = await this.db.$transaction([
-        this.db.studentDevice.findMany({ where, ...paging, orderBy: [{ registered_at: 'desc' }, { id: 'asc' }], select: { id: true, user_id: true, label: true, registered_at: true, last_seen_at: true, revoked_at: true, user: { select: { name: true } } } }),
-        this.db.studentDevice.count({ where }),
-      ]);
-      return { items: rows.map(r => ({ id: r.id, student_id: r.user_id, student_name: r.user.name, title: r.label, status: r.revoked_at ? 'REVOKED' : 'REGISTERED', detail: `Last seen: ${r.last_seen_at.toISOString()}`, created_at: r.registered_at })), total, page: q.page, pageSize: q.pageSize };
     }
     throw new BadRequestException('Unsupported record type');
   }

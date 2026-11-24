@@ -22,7 +22,7 @@ import type { CurrentUser } from '../../common/types.js';
 import { PaymentsService } from './payments.service.js';
 import { ChapaGateway } from './chapa.gateway.js';
 import { CreatePaymentDto } from './payments.dto.js';
-import { ReasonDto } from '../devices/devices.module.js';
+import { StudentReasonDto as ReasonDto } from '../students/students.dto.js';
 @Controller('payments')
 class PaymentsController {
   constructor(private readonly service: PaymentsService) {}

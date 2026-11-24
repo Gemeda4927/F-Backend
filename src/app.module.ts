@@ -8,7 +8,7 @@ import { GreetingModule } from './modules/greeting/greeting.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { UsersModule } from './modules/users/users.module.js';
-import { DevicesModule } from './modules/devices/devices.module.js';
+import { PushTokensModule } from './modules/push-tokens/push-tokens.module.js';
 import { CoursesModule } from './modules/courses/courses.module.js';
 import { LessonsModule } from './modules/lessons/lessons.module.js';
 import { EnrollmentsModule } from './modules/enrollments/enrollments.module.js';
@@ -28,7 +28,7 @@ import { CourseAnalyticsModule } from './modules/course-analytics/course-analyti
     HealthModule,
     AuthModule,
     UsersModule,
-    DevicesModule,
+    PushTokensModule,
     CoursesModule,
     LessonsModule,
     EnrollmentsModule,

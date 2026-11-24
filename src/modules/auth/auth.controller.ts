@@ -35,7 +35,7 @@ export class AuthController {
   }
   private issue(
     res: Response,
-    result: { access: string; refresh: string; device?: string; user: unknown },
+    result: { access: string; refresh: string; user: unknown },
   ) {
     const options = this.cookieOptions();
     res.cookie('access_token', result.access, {
@@ -46,11 +46,7 @@ export class AuthController {
       ...options,
       maxAge: 30 * 86400000,
     });
-    if (result.device)
-      res.cookie('device_token', result.device, {
-        ...options,
-        maxAge: 365 * 86400000,
-      });
+    res.clearCookie('device_token', options);
     return result.user;
   }
   @Public()
@@ -65,7 +61,6 @@ export class AuthController {
       res,
       await this.service.register(
         dto,
-        req.cookies?.device_token,
         req.headers['user-agent'] ?? '',
       ),
     );
@@ -83,7 +78,6 @@ export class AuthController {
       res,
       await this.service.login(
         dto,
-        req.cookies?.device_token,
         req.headers['user-agent'] ?? '',
       ),
     );
@@ -99,7 +93,6 @@ export class AuthController {
       res,
       await this.service.refresh(
         req.cookies?.refresh_token,
-        req.cookies?.device_token,
       ),
     );
   }
@@ -131,7 +124,6 @@ export class AuthController {
         intent === 'link'
           ? await this.service.currentGoogleLinkUser(
               req.cookies?.access_token,
-              req.cookies?.device_token,
             )
           : undefined;
       const result = await this.service.googleCallback(
@@ -140,7 +132,6 @@ export class AuthController {
         state,
         nonce,
         intent,
-        req.cookies?.device_token,
         req.headers['user-agent'] ?? '',
         currentUserId,
       );
@@ -167,6 +158,7 @@ export class AuthController {
     await this.service.logout(user);
     res.clearCookie('access_token', this.cookieOptions());
     res.clearCookie('refresh_token', this.cookieOptions());
+    res.clearCookie('device_token', this.cookieOptions());
     return { message: 'Signed out' };
   }
   @Get('me') me(@User() user: CurrentUser) {

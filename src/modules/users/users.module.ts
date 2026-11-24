@@ -75,11 +75,8 @@ class UsersController {
         where: { user_id: id, revoked_at: null },
         data: { revoked_at: new Date() },
       });
-      await tx.studentDevice.updateMany({
-        where: { user_id: id, revoked_at: null },
-        data: { revoked_at: new Date() },
-      });
-      await audit(tx, { actor, target: id, action: dto.role ? 'ROLE_CHANGED' : 'USER_UPDATE', description: 'Account permissions or status updated; sessions and device registrations revoked.', oldValues: { role: target.role, active: target.active }, newValues: { role: user.role, active: user.active } });
+      await tx.fcmToken.deleteMany({ where: { user_id: id } });
+      await audit(tx, { actor, target: id, action: dto.role ? 'ROLE_CHANGED' : 'USER_UPDATE', description: 'Account permissions or active status updated; sessions and push tokens revoked.', oldValues: { role: target.role, active: target.active }, newValues: { role: user.role, active: user.active } });
       return user;
     });
   }
