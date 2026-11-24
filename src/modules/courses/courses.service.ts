@@ -243,7 +243,10 @@ export class CoursesService {
       create: { course_id: id, content: bytes, mime_type: mime },
       update: { content: bytes, mime_type: mime },
     });
-    return { message: 'Thumbnail saved' };
+    // Return the persisted course only after the thumbnail row has been
+    // committed, so the client can replace its optimistic view with fresh
+    // database-backed state.
+    return this.managedDetails(user, id);
   }
   async removeThumbnail(user: CurrentUser, id: string) {
     await this.assertOwner(user, id);
