@@ -63,7 +63,7 @@ import { notify, notifyCourse } from '../notifications/notifications.js';
 class AssessmentDto {
   @IsString() @MinLength(3) @MaxLength(160) title!: string;
   @IsIn(['EXAM', 'ASSIGNMENT']) kind!: string;
-  @IsOptional() @IsIn(['MID', 'FINAL', 'EXIT']) exam_type?: 'MID' | 'FINAL' | 'EXIT' | null;
+  @IsOptional() @IsIn(['MID', 'FINAL', 'EXIT', 'COC']) exam_type?: 'MID' | 'FINAL' | 'EXIT' | 'COC' | null;
   @IsOptional() @IsString() @MaxLength(160) university?: string | null;
   @IsOptional() @IsString() @MaxLength(160) campus?: string | null;
   @IsOptional() @IsString() @MaxLength(160) department?: string | null;
@@ -590,7 +590,8 @@ export class AssessmentsController {
   }
   @Get('catalog') async catalog(
     @User() u: CurrentUser,
-    @Query('exam_type') examType?: string,
+    @Query('exam_type') examTypeParam?: string,
+    @Query('type') typeParam?: string,
     @Query('university') university?: string,
     @Query('campus') campus?: string,
     @Query('department') department?: string,
@@ -598,20 +599,21 @@ export class AssessmentsController {
     @Query('page') pageParam?: string,
     @Query('page_size') pageSizeParam?: string,
   ) {
+    const examType = examTypeParam ?? typeParam;
     const page = Math.max(1, Number(pageParam) || 1);
     const pageSize = Math.min(48, Math.max(1, Number(pageSizeParam) || 12));
     const base: Prisma.AssessmentWhereInput = {
       published: true,
       kind: 'EXAM',
-      exam_type: ['MID', 'FINAL', 'EXIT'].includes(examType ?? '')
-        ? (examType as 'MID' | 'FINAL' | 'EXIT')
+      exam_type: ['MID', 'FINAL', 'EXIT', 'COC'].includes(examType ?? '')
+        ? (examType as 'MID' | 'FINAL' | 'EXIT' | 'COC')
         : undefined,
       university: university ? { equals: university } : undefined,
       campus: campus ? { equals: campus } : undefined,
       department: department ? { equals: department } : undefined,
       course: { published: true, archived_at: null, visibility: 'PUBLIC' },
       ...(search
-        ? { OR: [{ title: { contains: search, mode: 'insensitive' } }, { course: { title: { contains: search, mode: 'insensitive' } } }] }
+        ? { title: { contains: search, mode: 'insensitive' } }
         : {}),
     };
     const [rows, total, facets] = await Promise.all([

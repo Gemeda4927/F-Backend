@@ -43,6 +43,7 @@ enum ExamType {
   MID
   FINAL
   EXIT
+  COC
 }
 
 model User {
