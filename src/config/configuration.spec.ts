@@ -15,7 +15,11 @@ describe('runtime configuration', () => {
     configure('3001', 'http://localhost:3000, https://example.com ');
     expect(getConfiguration()).toEqual({
       port: 3001,
-      corsOrigins: ['http://localhost:3000', 'https://example.com'],
+      corsOrigins: [
+        'http://localhost:3000',
+        'https://example.com',
+        'https://f-fronted-vy1c.vercel.app',
+      ],
     });
   });
 

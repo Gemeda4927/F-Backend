@@ -9,11 +9,9 @@ export function getAllowedFrontendOrigins() {
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  const production =
-    process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production';
   return [
     ...new Set(
-      production ? [...configured, deployedFrontendOrigin] : configured,
+      [...configured, deployedFrontendOrigin],
     ),
   ];
 }
