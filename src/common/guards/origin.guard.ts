@@ -5,6 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { getAllowedFrontendOrigins } from '../../config/allowed-origins.js';
 @Injectable()
 export class OriginGuard implements CanActivate {
   canActivate(context: ExecutionContext) {
@@ -15,13 +16,7 @@ export class OriginGuard implements CanActivate {
     )
       return true;
     // Cookie-authenticated mutations require the configured frontend Origin.
-    const allowed = (
-      process.env.CORS_ORIGINS ??
-      process.env.FRONTEND_URL ??
-      'http://localhost:3000'
-    )
-      .split(',')
-      .map((s) => s.trim());
+    const allowed = getAllowedFrontendOrigins();
     if (!req.headers.origin || !allowed.includes(req.headers.origin))
       throw new ForbiddenException('Untrusted request origin');
     return true;
