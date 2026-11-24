@@ -103,6 +103,61 @@ export class AuthController {
       ),
     );
   }
+  @Public()
+  @Get('google/start')
+  googleStart(@Res() res: Response) {
+    const result = this.service.googleStart();
+    this.googleCookies(res, result.state, result.nonce, result.intent);
+    return res.redirect(result.url);
+  }
+  @Get('google/link/start')
+  googleLinkStart(@User() user: CurrentUser, @Res() res: Response) {
+    const result = this.service.googleStart(user.id);
+    this.googleCookies(res, result.state, result.nonce, result.intent);
+    return res.redirect(result.url);
+  }
+  @Public()
+  @Get('google/callback')
+  async googleCallback(@Req() req: AuthRequest, @Res() res: Response) {
+    const clear = { path: '/api/v1' };
+    const state = req.cookies?.google_oauth_state;
+    const nonce = req.cookies?.google_oauth_nonce;
+    const intent = req.cookies?.google_oauth_intent;
+    res.clearCookie('google_oauth_state', clear);
+    res.clearCookie('google_oauth_nonce', clear);
+    res.clearCookie('google_oauth_intent', clear);
+    try {
+      const currentUserId =
+        intent === 'link'
+          ? await this.service.currentGoogleLinkUser(
+              req.cookies?.access_token,
+              req.cookies?.device_token,
+            )
+          : undefined;
+      const result = await this.service.googleCallback(
+        req.query.code as string | undefined,
+        req.query.state as string | undefined,
+        state,
+        nonce,
+        intent,
+        req.cookies?.device_token,
+        req.headers['user-agent'] ?? '',
+        currentUserId,
+      );
+      if ('linked' in result)
+        return res.redirect(
+          `${process.env.FRONTEND_URL}/profile?google_linked=1`,
+        );
+      this.issue(res, result);
+      return res.redirect(`${process.env.FRONTEND_URL}/google/callback`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Google sign-in failed';
+      return res.redirect(
+        `${process.env.FRONTEND_URL}/login?google_error=${encodeURIComponent(message)}`,
+      );
+    }
+  }
   @Post('logout')
   @HttpCode(200)
   async logout(
@@ -136,5 +191,16 @@ export class AuthController {
   @Get('reset-password/validate')
   validateReset(@Query() dto: ValidateResetDto) {
     return this.service.validateReset(dto.token);
+  }
+  private googleCookies(
+    res: Response,
+    state: string,
+    nonce: string,
+    intent: string,
+  ) {
+    const options = { ...this.cookieOptions(), maxAge: 10 * 60 * 1000 };
+    res.cookie('google_oauth_state', state, options);
+    res.cookie('google_oauth_nonce', nonce, options);
+    res.cookie('google_oauth_intent', intent, options);
   }
 }

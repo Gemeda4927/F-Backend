@@ -49,6 +49,9 @@ export function validatePlatformEnvironment() {
   }
   if (process.env.JWT_ACCESS_SECRET === process.env.JWT_REFRESH_SECRET)
     throw new Error('Use distinct JWT secrets');
+  const googleSettings = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'];
+  if (googleSettings.some((name) => process.env[name]) && googleSettings.some((name) => !process.env[name]))
+    throw new Error('Google sign-in requires GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI');
   if (
     !['postgres:', 'postgresql:'].includes(
       new URL(process.env.DATABASE_URL!).protocol,

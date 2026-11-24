@@ -182,6 +182,7 @@ No real charge, refund or email is sent by automated tests.
 | SHADOW_DATABASE_URL | Optional separate disposable database for migrate dev |
 | PORT | API listener, default 5000 |
 | FRONTEND_URL / BACKEND_URL | Required browser/public API origins without trailing slash |
+| GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI | Optional Google OpenID Connect credentials and exact backend callback URL |
 | CORS_ORIGINS | Comma-separated exact allowed browser origins |
 | JWT_ACCESS_SECRET / JWT_REFRESH_SECRET | Different random secrets, at least 32 characters each |
 | COOKIE_SECURE | true for HTTPS; false only locally |

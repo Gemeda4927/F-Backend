@@ -61,6 +61,7 @@ model User {
   created_at     DateTime             @default(now()) @db.Timestamptz(6)
   devices        StudentDevice[]
   sessions       AuthSession[]
+  providerAccounts AuthProviderAccount[]
   resets         PasswordResetToken[]
   courses        Course[]
   payments       Payment[]
@@ -80,6 +81,23 @@ model User {
 
   @@index([role_id])
   @@map("users")
+}
+
+model AuthProviderAccount {
+  id                 String   @id @default(uuid()) @db.Uuid
+  user_id            String   @db.Uuid
+  provider           String
+  provider_account_id String
+  email              String?
+  email_verified     Boolean  @default(false)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @updatedAt @db.Timestamptz(6)
+  user               User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([provider, provider_account_id])
+  @@unique([user_id, provider])
+  @@index([email])
+  @@map("auth_provider_accounts")
 }
 
 model Role {

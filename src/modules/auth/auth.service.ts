@@ -7,6 +7,7 @@ import {
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CurrentUser } from '../../common/types.js';
 import type { User as DbUser } from '../../generated/prisma/client.js';
@@ -104,19 +105,10 @@ export class AuthService {
           const trusted = await tx.studentDevice.findFirst({
             where: { token_hash: digest(deviceToken), revoked_at: null },
           });
-          if (trusted && trusted.user_id !== user.id)
-            throw new ConflictException(
-              'This browser installation is already registered. Use verified recovery or contact support.',
-            );
-        }
-        if (installationHash) {
-          const association = await tx.studentDevice.findFirst({
-            where: { installation_hash: installationHash, revoked_at: null },
-          });
-          if (association && association.user_id !== user.id)
-            throw new ConflictException(
-              'This browser installation is already registered. Use account recovery or contact an administrator.',
-            );
+          // A browser cookie belongs to one account at a time, not to the
+          // browser itself. When accounts are switched, issue a fresh token
+          // for the newly authenticated account instead of blocking login.
+          if (!trusted || trusted.user_id !== user.id) deviceToken = undefined;
         }
 
         const active = await tx.studentDevice.findMany({
@@ -128,12 +120,23 @@ export class AuthService {
         const existing = active.find(
           (device) => device.token_hash === presentedTokenHash,
         );
-        if (existing) {
-          deviceId = existing.id;
+        const installation = installationHash
+          ? active.find(
+              (device) => device.installation_hash === installationHash,
+            )
+          : undefined;
+        const currentDevice = existing ?? installation;
+        if (currentDevice) {
+          const nextToken = existing
+            ? deviceToken!
+            : randomBytes(32).toString('hex');
+          deviceToken = nextToken;
+          deviceId = currentDevice.id;
           await tx.studentDevice.update({
-            where: { id: existing.id },
+            where: { id: currentDevice.id },
             data: {
               last_seen_at: new Date(),
+              token_hash: digest(nextToken),
               ...(installationHash
                 ? { installation_hash: installationHash }
                 : {}),
@@ -193,6 +196,269 @@ export class AuthService {
         action: 'LOGIN_SUCCEEDED',
         description:
           'Signed in successfully; previous sessions on this authorized installation replaced.',
+      });
+      return { ...tokens, device: deviceToken, user: publicUser(user) };
+    });
+  }
+  googleStart(linkUserId?: string) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+    if (!clientId || !clientSecret || !redirectUri)
+      throw new BadRequestException('Google sign-in is not configured');
+    const state = randomBytes(32).toString('hex');
+    const nonce = randomBytes(32).toString('hex');
+    const client = new OAuth2Client(clientId, clientSecret, redirectUri);
+    return {
+      state,
+      nonce,
+      intent: linkUserId ? 'link' : 'login',
+      url: client.generateAuthUrl({
+        access_type: 'online',
+        prompt: 'select_account',
+        scope: ['openid', 'email', 'profile'],
+        state,
+        nonce,
+      }),
+    };
+  }
+  async currentGoogleLinkUser(accessToken?: string, deviceCookie?: string) {
+    if (!accessToken) return undefined;
+    try {
+      const claims = jwt.verify(accessToken, process.env.JWT_ACCESS_SECRET!, {
+        algorithms: ['HS256'],
+        issuer: 'freshman',
+        audience: 'freshman-web',
+      }) as jwt.JwtPayload;
+      const session = await this.db.authSession.findFirst({
+        where: {
+          id: claims.sid,
+          user_id: claims.sub,
+          revoked_at: null,
+          expires_at: { gt: new Date() },
+          user: { active: true },
+        },
+        include: { studentDevice: true, user: true },
+      });
+      if (!session) return undefined;
+      if (
+        session.user.role === 'STUDENT' &&
+        (!session.studentDevice ||
+          !deviceCookie ||
+          session.studentDevice.token_hash !== digest(deviceCookie))
+      )
+        return undefined;
+      return session.user.id;
+    } catch {
+      return undefined;
+    }
+  }
+  async googleCallback(
+    code: string | undefined,
+    state: string | undefined,
+    expectedState: string | undefined,
+    nonce: string | undefined,
+    intent: string | undefined,
+    deviceCookie: string | undefined,
+    agent: string,
+    currentUserId?: string,
+  ) {
+    if (!code || !state || !expectedState || state !== expectedState || !nonce)
+      throw new UnauthorizedException('Invalid Google sign-in state');
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+    if (!clientId || !clientSecret || !redirectUri)
+      throw new BadRequestException('Google sign-in is not configured');
+    const client = new OAuth2Client(clientId, clientSecret, redirectUri);
+    const { tokens } = await client.getToken(code);
+    if (!tokens.id_token)
+      throw new UnauthorizedException('Google identity token missing');
+    const ticket = await client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: clientId,
+    });
+    const payload = ticket.getPayload();
+    if (
+      !payload?.sub ||
+      !payload.email ||
+      payload.email_verified !== true ||
+      !payload.iss ||
+      !['accounts.google.com', 'https://accounts.google.com'].includes(
+        payload.iss,
+      ) ||
+      payload.aud !== clientId ||
+      (payload.exp ?? 0) <= Math.floor(Date.now() / 1000) ||
+      payload.nonce !== nonce
+    )
+      throw new UnauthorizedException('Invalid Google identity token');
+    const providerAccount = await this.db.authProviderAccount.findUnique({
+      where: {
+        provider_provider_account_id: {
+          provider: 'GOOGLE',
+          provider_account_id: payload.sub,
+        },
+      },
+      include: { user: true },
+    });
+    if (intent === 'link') {
+      if (!currentUserId)
+        throw new UnauthorizedException('Sign in before linking Google');
+      if (providerAccount && providerAccount.user_id !== currentUserId)
+        throw new ConflictException(
+          'This Google account is already linked to another Learnova account',
+        );
+      const emailUser = await this.db.user.findUnique({
+        where: { email: payload.email.toLowerCase() },
+      });
+      if (emailUser && emailUser.id !== currentUserId)
+        throw new ConflictException(
+          'This Google email belongs to another Learnova account',
+        );
+      if (!providerAccount)
+        await this.db.authProviderAccount.create({
+          data: {
+            user_id: currentUserId,
+            provider: 'GOOGLE',
+            provider_account_id: payload.sub,
+            email: payload.email.toLowerCase(),
+            email_verified: true,
+          },
+        });
+      return { linked: true };
+    }
+    if (providerAccount) {
+      if (!providerAccount.user.active)
+        throw new UnauthorizedException('This account is inactive');
+      return this.loginUserById(providerAccount.user.id, deviceCookie, agent);
+    }
+    const emailUser = await this.db.user.findUnique({
+      where: { email: payload.email.toLowerCase() },
+    });
+    if (emailUser)
+      throw new ConflictException(
+        'An account with this email already exists. Sign in with your password, then link Google from your profile.',
+      );
+    const user = await this.db.atomic(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: payload.email!.toLowerCase(),
+          name: (payload.name || payload.email!.split('@')[0])
+            .trim()
+            .slice(0, 100),
+          password_hash: await bcrypt.hash(randomBytes(32).toString('hex'), 12),
+          role: 'STUDENT',
+          role_id: 'STUDENT',
+          providerAccounts: {
+            create: {
+              provider: 'GOOGLE',
+              provider_account_id: payload.sub!,
+              email: payload.email!.toLowerCase(),
+              email_verified: true,
+            },
+          },
+        },
+      });
+      await audit(tx, {
+        target: created.id,
+        action: 'ACCOUNT_REGISTERED',
+        description: 'Student account created with Google.',
+      });
+      return created;
+    });
+    return this.loginUserById(user.id, deviceCookie, agent);
+  }
+  private async loginUserById(
+    userId: string,
+    deviceCookie: string | undefined,
+    agent: string,
+  ) {
+    const found = await this.db.user.findUnique({ where: { id: userId } });
+    if (!found || !found.active)
+      throw new UnauthorizedException('This account is inactive');
+    return this.db.atomic(async (tx) => {
+      const user = await tx.user.update({
+        where: { id: found.id },
+        data: { auth_version: { increment: 1 }, last_login_at: new Date() },
+      });
+      let deviceId: string | null = null,
+        deviceToken = deviceCookie;
+      if (user.role === 'STUDENT') {
+        if (deviceToken) {
+          const trusted = await tx.studentDevice.findFirst({
+            where: { token_hash: digest(deviceToken), revoked_at: null },
+          });
+          if (!trusted || trusted.user_id !== user.id) deviceToken = undefined;
+        }
+        const active = await tx.studentDevice.findMany({
+          where: { user_id: user.id, revoked_at: null },
+        });
+        const existing = active.find(
+          (device) =>
+            device.token_hash ===
+            (deviceToken ? digest(deviceToken) : undefined),
+        );
+        const currentDevice = existing;
+        if (currentDevice) {
+          const nextToken = deviceToken!;
+          deviceToken = nextToken;
+          deviceId = currentDevice.id;
+          await tx.studentDevice.update({
+            where: { id: currentDevice.id },
+            data: { last_seen_at: new Date(), token_hash: digest(nextToken) },
+          });
+        } else {
+          deviceToken = randomBytes(32).toString('hex');
+          const device = await tx.studentDevice.create({
+            data: {
+              user_id: user.id,
+              token_hash: digest(deviceToken),
+              label: agent.slice(0, 200) || 'Registered browser',
+            },
+          });
+          deviceId = device.id;
+          await audit(tx, {
+            actor: {
+              id: user.id,
+              name: user.name,
+              role: user.role as CurrentUser['role'],
+            },
+            target: user.id,
+            action: 'DEVICE_REGISTERED',
+            description: 'Learning browser registered.',
+            resourceType: 'DEVICE',
+            resourceId: device.id,
+          });
+        }
+      }
+      await tx.authSession.updateMany({
+        where: {
+          user_id: user.id,
+          revoked_at: null,
+          ...(user.role === 'STUDENT' ? { device_id: deviceId } : {}),
+        },
+        data: { revoked_at: new Date() },
+      });
+      const id = randomUUID(),
+        tokens = this.tokens(user, id);
+      await tx.authSession.create({
+        data: {
+          id,
+          user_id: user.id,
+          device_id: deviceId,
+          refresh_hash: digest(tokens.refresh),
+          expires_at: new Date(Date.now() + 30 * 86400000),
+        },
+      });
+      await audit(tx, {
+        actor: {
+          id: user.id,
+          name: user.name,
+          role: user.role as CurrentUser['role'],
+        },
+        target: user.id,
+        action: 'LOGIN_SUCCEEDED',
+        description: 'Signed in successfully with Google.',
       });
       return { ...tokens, device: deviceToken, user: publicUser(user) };
     });
@@ -345,7 +611,8 @@ export class AuthService {
     };
   }
   async validateReset(token: string) {
-    if (!token) throw new BadRequestException('Invalid or expired recovery link');
+    if (!token)
+      throw new BadRequestException('Invalid or expired recovery link');
     const reset = await this.db.passwordResetToken.findFirst({
       where: {
         token_hash: digest(token),
@@ -354,7 +621,8 @@ export class AuthService {
       },
       select: { id: true },
     });
-    if (!reset) throw new BadRequestException('Invalid or expired recovery link');
+    if (!reset)
+      throw new BadRequestException('Invalid or expired recovery link');
     return { valid: true };
   }
   profile(user: CurrentUser, name: string) {
