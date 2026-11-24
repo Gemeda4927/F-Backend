@@ -3,7 +3,9 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { CurrentUser } from '../../common/types.js';
@@ -52,7 +54,7 @@ export class CoursesService {
             },
           },
         },
-        thumbnail: { select: { course_id: true } },
+        thumbnail: { select: { course_id: true, secure_url: true } },
       },
       orderBy: { created_at: 'desc' },
       take: 100,
@@ -70,6 +72,7 @@ export class CoursesService {
         preview_count: lessons.filter((lesson) => lesson.preview).length,
         quiz_count: lessons.filter((lesson) => lesson.kind === 'QUIZ').length,
         has_thumbnail: !!thumbnail,
+        thumbnail_url: thumbnail?.secure_url ?? null,
       }),
     );
   }
@@ -78,7 +81,7 @@ export class CoursesService {
       where: { id, published: true, archived_at: null, visibility: 'PUBLIC' },
       include: {
         instructor: { select: { name: true } },
-        thumbnail: { select: { course_id: true } },
+        thumbnail: { select: { course_id: true, secure_url: true } },
         lessons: {
           where: { status: 'PUBLISHED' },
           select: {
@@ -100,6 +103,7 @@ export class CoursesService {
       ...course,
       instructor_name: instructor.name,
       has_thumbnail: !!thumbnail,
+      thumbnail_url: thumbnail?.secure_url ?? null,
     };
   }
   async learningDetails(user: CurrentUser, id: string) {
@@ -109,6 +113,7 @@ export class CoursesService {
       where: { id },
       include: {
         instructor: { select: { name: true } },
+        thumbnail: { select: { secure_url: true } },
         lessons: {
           where: { status: 'PUBLISHED' },
           select: {
@@ -124,8 +129,13 @@ export class CoursesService {
         },
       },
     });
-    const { instructor, ...course } = row;
-    return { ...course, instructor_name: instructor.name };
+    const { instructor, thumbnail, ...course } = row;
+    return {
+      ...course,
+      instructor_name: instructor.name,
+      has_thumbnail: !!thumbnail,
+      thumbnail_url: thumbnail?.secure_url ?? null,
+    };
   }
   async owned(user: CurrentUser) {
     const rows = await this.db.course.findMany({
@@ -142,13 +152,14 @@ export class CoursesService {
             },
           },
         },
-        thumbnail: { select: { course_id: true } },
+        thumbnail: { select: { course_id: true, secure_url: true } },
       },
       orderBy: { created_at: 'desc' },
     });
     return rows.map(({ thumbnail, instructor, ...course }) => ({
       ...course,
       has_thumbnail: !!thumbnail,
+      thumbnail_url: thumbnail?.secure_url ?? null,
       instructor_name: instructor.name,
     }));
   }
@@ -196,7 +207,7 @@ export class CoursesService {
       where: { id },
       include: {
         instructor: { select: { name: true } },
-        thumbnail: { select: { course_id: true } },
+        thumbnail: { select: { course_id: true, secure_url: true } },
         _count: {
           select: {
             lessons: true,
@@ -212,6 +223,7 @@ export class CoursesService {
     return {
       ...course,
       has_thumbnail: !!thumbnail,
+      thumbnail_url: thumbnail?.secure_url ?? null,
       instructor_name: instructor.name,
     };
   }
@@ -243,27 +255,44 @@ export class CoursesService {
     mime: string,
   ) {
     await this.assertOwner(user, id);
-    const cloudinary = cloudinaryConfigured()
-      ? await uploadCloudinaryImage(content, mime, `courses/${id}/thumbnail`)
-      : null;
-    await this.db.courseThumbnail.upsert({
+    if (!cloudinaryConfigured())
+      throw new ServiceUnavailableException(
+        'Cloudinary storage is not configured. Contact an administrator.',
+      );
+    const previous = await this.db.courseThumbnail.findUnique({
       where: { course_id: id },
-      create: {
-        course_id: id,
-        content: cloudinary ? null : Uint8Array.from(content),
-        mime_type: mime,
-        storage_provider: cloudinary ? 'cloudinary' : 'database',
-        public_id: cloudinary?.public_id,
-        secure_url: cloudinary?.secure_url,
-      },
-      update: {
-        content: cloudinary ? null : Uint8Array.from(content),
-        mime_type: mime,
-        storage_provider: cloudinary ? 'cloudinary' : 'database',
-        public_id: cloudinary?.public_id,
-        secure_url: cloudinary?.secure_url,
-      },
+      select: { public_id: true, storage_provider: true },
     });
+    const uploaded = await uploadCloudinaryImage(
+      content,
+      mime,
+      `learnova/course-thumbnails/${id}-${randomUUID()}`,
+    );
+    try {
+      await this.db.courseThumbnail.upsert({
+        where: { course_id: id },
+        create: {
+          course_id: id,
+          content: null,
+          mime_type: mime,
+          storage_provider: 'cloudinary',
+          public_id: uploaded.public_id,
+          secure_url: uploaded.secure_url,
+        },
+        update: {
+          content: null,
+          mime_type: mime,
+          storage_provider: 'cloudinary',
+          public_id: uploaded.public_id,
+          secure_url: uploaded.secure_url,
+        },
+      });
+    } catch (error) {
+      await deleteCloudinaryImage(uploaded.public_id).catch(() => undefined);
+      throw error;
+    }
+    if (previous?.storage_provider === 'cloudinary' && previous.public_id)
+      await deleteCloudinaryImage(previous.public_id).catch(() => undefined);
     // Return the persisted course only after the thumbnail row has been
     // committed, so the client can replace its optimistic view with fresh
     // database-backed state.
