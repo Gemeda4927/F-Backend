@@ -73,7 +73,7 @@ export class PaymentsService {
     const prior = await this.db.payment.findFirst({ where: { user_id: user.id, course_id: course.id, status: 'PENDING' }, orderBy: { created_at: 'desc' } });
     if (prior) return prior;
     let asset: { public_id: string; secure_url: string; resource_type: string; bytes: number } | undefined;
-    if (file) asset = await uploadCloudinaryFile(file.buffer, file.mimetype, `learnova/payment-receipts/${randomUUID()}`);
+    if (file) asset = await uploadCloudinaryFile(file.buffer, file.mimetype, `learnova/payment-receipts/${randomUUID()}`, 'authenticated');
     return this.db.payment.create({ data: {
       user_id: user.id, course_id: course.id, tx_ref: 'manual-' + randomUUID(), mode: 'manual', amount_minor: amount, currency: course.currency,
       idempotency_key: randomUUID(), payment_method: dto.payment_method, payer_name: dto.payer_name.trim(), provider_ref: reference || null,

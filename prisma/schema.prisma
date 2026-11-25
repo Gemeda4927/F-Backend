@@ -263,6 +263,20 @@ model CourseThumbnail {
   @@map("course_thumbnails")
 }
 
+model AuthAppearance {
+  id              String   @id @default("default")
+  headline        String   @default("Your next chapter starts here.")
+  description     String   @default("Build practical skills, learn from expert-led courses, and keep moving toward the future you want.")
+  slogan          String   @default("Learn Today. Innovate Tomorrow.")
+  overlay_opacity Float    @default(0.48)
+  public_id       String?
+  secure_url      String?
+  mime_type       String?
+  updated_at      DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@map("auth_appearance")
+}
+
 model CourseView {
   id                 String   @id @default(uuid()) @db.Uuid
   course_id          String   @db.Uuid

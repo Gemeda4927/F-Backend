@@ -20,6 +20,7 @@ import { ContributionsModule } from './modules/contributions/contributions.modul
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { StudioModule } from './modules/studio/studio.module.js';
 import { CourseAnalyticsModule } from './modules/course-analytics/course-analytics.module.js';
+import { AuthAppearanceModule } from './modules/auth-appearance/auth-appearance.module.js';
 @Module({
   imports: [
     PrismaModule,
@@ -40,6 +41,7 @@ import { CourseAnalyticsModule } from './modules/course-analytics/course-analyti
     NotificationsModule,
     StudioModule,
     CourseAnalyticsModule,
+    AuthAppearanceModule,
   ],
   providers: [
     ThrottlerGuard,

@@ -42,6 +42,7 @@ export async function uploadCloudinaryFile(
   content: Buffer,
   mimeType: string,
   publicId: string,
+  deliveryType: 'upload' | 'authenticated' = 'upload',
 ): Promise<CloudinaryAsset> {
   const settings = config();
   if (!settings) throw new Error('Cloudinary storage is not configured');
@@ -59,7 +60,7 @@ export async function uploadCloudinaryFile(
     new Blob([Uint8Array.from(content)], { type: mimeType }),
     publicId.split('/').pop() ?? 'receipt',
   );
-  form.append('type', 'authenticated');
+  if (deliveryType !== 'upload') form.append('type', deliveryType);
   form.append('api_key', settings.apiKey);
   form.append('signature', signature(params, settings.apiSecret));
   for (const [key, value] of Object.entries(params)) form.append(key, value);
