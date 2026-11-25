@@ -14,6 +14,8 @@ import type { CurrentUser } from '../../common/types.js';
 import { audit } from '../audit/audit.js';
 import { ChapaGateway, minorUnits, chapaDescription } from './chapa.gateway.js';
 import type { CreatePaymentDto } from './payments.dto.js';
+import type { ManualPaymentDto } from './payments.dto.js';
+import { uploadCloudinaryFile } from '../../common/cloudinary.js';
 export function validWebhook(
   raw: Buffer,
   signature: string | undefined,
@@ -39,6 +41,70 @@ export class PaymentsService {
     private readonly db: PrismaService,
     private readonly gateway: ChapaGateway,
   ) {}
+  private validateReceipt(file?: Express.Multer.File) {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024)
+      throw new ConflictException('Payment receipt must be 5 MB or smaller');
+    const mime = file.mimetype;
+    const b = file.buffer;
+    const jpeg = mime === 'image/jpeg' && b.length > 4 && b[0] === 0xff && b[1] === 0xd8 && b[b.length - 2] === 0xff && b[b.length - 1] === 0xd9;
+    const png = mime === 'image/png' && b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const webp = mime === 'image/webp' && b.length > 12 && b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'WEBP';
+    const pdf = mime === 'application/pdf' && b.subarray(0, 5).toString() === '%PDF-';
+    if (!(jpeg || png || webp || pdf))
+      throw new ConflictException('Receipt must be a valid JPEG, PNG, WebP, or PDF file');
+  }
+  async createManual(user: CurrentUser, dto: ManualPaymentDto, file?: Express.Multer.File) {
+    if (user.role !== 'STUDENT') throw new ForbiddenException('Student account required');
+    this.validateReceipt(file);
+    if (!dto.reference_number && !file) throw new ConflictException('Add a transaction reference or upload a payment receipt');
+    const amount = Math.round(Number(dto.amount_paid) * 100);
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new ConflictException('Enter a valid amount paid');
+    const course = await this.db.course.findFirst({ where: { id: dto.course_id, published: true, archived_at: null, visibility: 'PUBLIC' } });
+    if (!course || course.price_minor <= 0) throw new ConflictException('Select a published paid course');
+    if (amount !== course.price_minor) throw new ConflictException('Amount paid must match the course amount due');
+    const reference = dto.reference_number?.trim() || undefined;
+    if (reference) {
+      const reused = await this.db.payment.findUnique({ where: { provider_ref: reference }, select: { id: true, status: true } });
+      if (reused) throw new ConflictException('This transaction reference has already been submitted');
+    }
+    const existing = await this.db.enrollment.findUnique({ where: { user_id_course_id: { user_id: user.id, course_id: course.id } } });
+    if (existing) throw new ConflictException('You already have access to this course');
+    const prior = await this.db.payment.findFirst({ where: { user_id: user.id, course_id: course.id, status: 'PENDING' }, orderBy: { created_at: 'desc' } });
+    if (prior) return prior;
+    let asset: { public_id: string; secure_url: string; resource_type: string; bytes: number } | undefined;
+    if (file) asset = await uploadCloudinaryFile(file.buffer, file.mimetype, `learnova/payment-receipts/${randomUUID()}`);
+    return this.db.payment.create({ data: {
+      user_id: user.id, course_id: course.id, tx_ref: 'manual-' + randomUUID(), mode: 'manual', amount_minor: amount, currency: course.currency,
+      idempotency_key: randomUUID(), payment_method: dto.payment_method, payer_name: dto.payer_name.trim(), provider_ref: reference || null,
+      payment_date: new Date(dto.payment_date), admin_remark: dto.notes?.trim() || null, receipt_public_id: asset?.public_id, receipt_resource_type: asset?.resource_type,
+      receipt_url: asset?.secure_url, receipt_original_name: file?.originalname, receipt_mime_type: file?.mimetype, receipt_bytes: asset?.bytes,
+    } });
+  }
+  async decideManual(actor: CurrentUser, id: string, approve: boolean, remark?: string) {
+    return this.db.atomic(async (tx) => {
+      const payment = await tx.payment.findUnique({ where: { id }, include: { course: true } });
+      if (!payment) throw new NotFoundException('Payment not found');
+      if (payment.mode !== 'manual') throw new ConflictException('Only manual payments use this review workflow');
+      if (payment.status !== 'PENDING') return payment;
+      if (approve && payment.provider_ref) {
+        const duplicate = await tx.payment.findFirst({ where: { provider_ref: payment.provider_ref, status: 'SUCCEEDED', NOT: { id } } });
+        if (duplicate) throw new ConflictException('This transaction reference has already been verified for another purchase');
+      }
+      const status = approve ? 'APPROVED' : 'REJECTED';
+      const updated = await tx.payment.update({ where: { id, status: 'PENDING' }, data: { status, verified_at: new Date(), verified_by: actor.id, admin_remark: remark?.trim() || null } });
+      if (!approve) return updated;
+      const enrollment = await tx.enrollment.upsert({ where: { user_id_course_id: { user_id: payment.user_id, course_id: payment.course_id } }, update: { status: 'ACTIVE', payment_id: payment.id }, create: { user_id: payment.user_id, course_id: payment.course_id, payment_id: payment.id, status: 'ACTIVE' } });
+      await tx.courseEntitlement.upsert({ where: { enrollment_id: enrollment.id }, update: { state: 'ACTIVE', revoked_at: null }, create: { enrollment_id: enrollment.id, state: 'ACTIVE' } });
+      return updated;
+    });
+  }
+  async receipt(user: CurrentUser, id: string) {
+    const payment = await this.db.payment.findUnique({ where: { id }, select: { id: true, user_id: true, receipt_url: true, receipt_public_id: true, receipt_resource_type: true, receipt_original_name: true, receipt_mime_type: true } });
+    if (!payment) throw new NotFoundException('Payment not found');
+    if (payment.user_id !== user.id && !['ADMIN', 'SUPER_ADMIN'].includes(user.role)) throw new ForbiddenException('Receipt access denied');
+    return payment;
+  }
   private async revokeEntitlements(
     tx: Prisma.TransactionClient,
     paymentId: string,

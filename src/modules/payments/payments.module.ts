@@ -7,6 +7,8 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  UseInterceptors,
+  UploadedFile,
   Query,
   Req,
 } from '@nestjs/common';
@@ -22,10 +24,17 @@ import type { CurrentUser } from '../../common/types.js';
 import { PaymentsService } from './payments.service.js';
 import { ChapaGateway } from './chapa.gateway.js';
 import { CreatePaymentDto } from './payments.dto.js';
+import { ManualPaymentDto, PaymentDecisionDto } from './payments.dto.js';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { StudentReasonDto as ReasonDto } from '../students/students.dto.js';
 @Controller('payments')
 class PaymentsController {
   constructor(private readonly service: PaymentsService) {}
+  @Post('manual')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  manual(@User() u: CurrentUser, @Body() dto: ManualPaymentDto, @UploadedFile() file?: Express.Multer.File) {
+    return this.service.createManual(u, dto, file);
+  }
   @Post() @Throttle({ default: { limit: 5, ttl: 60000 } }) create(
     @User() u: CurrentUser,
     @Body() dto: CreatePaymentDto,
@@ -38,6 +47,9 @@ class PaymentsController {
   @Permissions('payments:review') @Get('review') review() {
     return this.service.review();
   }
+  @Permissions('payments:review') @Post(':id/approve') approve(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: PaymentDecisionDto) { return this.service.decideManual(u, id, true, dto.remark); }
+  @Permissions('payments:review') @Post(':id/reject') reject(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: PaymentDecisionDto) { return this.service.decideManual(u, id, false, dto.remark); }
+  @Get(':id/receipt') receipt(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string) { return this.service.receipt(u, id); }
   @Permissions('access:revoke') @Post(':id/revoke') revoke(
     @User() u: CurrentUser,
     @Param('id', ParseUUIDPipe) id: string,

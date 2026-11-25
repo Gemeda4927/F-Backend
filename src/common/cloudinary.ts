@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 type CloudinaryAsset = {
   public_id: string;
   secure_url: string;
+  resource_type: string;
+  bytes: number;
 };
 
 function config() {
@@ -36,7 +38,7 @@ function signature(params: Record<string, string>, apiSecret: string) {
     .digest('hex');
 }
 
-export async function uploadCloudinaryImage(
+export async function uploadCloudinaryFile(
   content: Buffer,
   mimeType: string,
   publicId: string,
@@ -50,17 +52,19 @@ export async function uploadCloudinaryImage(
     public_id: publicId,
     timestamp,
   };
+  const resourceType = mimeType === 'application/pdf' ? 'raw' : 'image';
   const form = new FormData();
   form.append(
     'file',
     new Blob([Uint8Array.from(content)], { type: mimeType }),
-    'image',
+    publicId.split('/').pop() ?? 'receipt',
   );
+  form.append('type', 'authenticated');
   form.append('api_key', settings.apiKey);
   form.append('signature', signature(params, settings.apiSecret));
   for (const [key, value] of Object.entries(params)) form.append(key, value);
   const response = await fetch(
-    `https://api.cloudinary.com/v1_1/${settings.cloudName}/image/upload`,
+    `https://api.cloudinary.com/v1_1/${settings.cloudName}/${resourceType}/upload`,
     { method: 'POST', body: form },
   );
   if (!response.ok) {
@@ -72,8 +76,15 @@ export async function uploadCloudinaryImage(
   const result = (await response.json()) as Partial<CloudinaryAsset>;
   if (!result.public_id || !result.secure_url)
     throw new Error('Cloudinary returned an incomplete upload response');
-  return { public_id: result.public_id, secure_url: result.secure_url };
+  return {
+    public_id: result.public_id,
+    secure_url: result.secure_url,
+    resource_type: resourceType,
+    bytes: Number((result as { bytes?: number }).bytes ?? content.byteLength),
+  };
 }
+
+export const uploadCloudinaryImage = uploadCloudinaryFile;
 
 export async function deleteCloudinaryImage(publicId: string) {
   const settings = config();

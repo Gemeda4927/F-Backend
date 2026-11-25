@@ -447,6 +447,17 @@ model Payment {
   @@index([mode, status], map: "payments_mode_status")
   mode String @default("unknown")
   verified_at DateTime? @db.Timestamptz(6)
+  payment_method String?
+  payer_name String?
+  payment_date DateTime? @db.Date
+  admin_remark String?
+  verified_by String? @db.Uuid
+  receipt_public_id String?
+  receipt_resource_type String?
+  receipt_url String?
+  receipt_original_name String?
+  receipt_mime_type String?
+  receipt_bytes Int?
   id              String       @id @default(uuid()) @db.Uuid
   user_id         String       @db.Uuid
   course_id       String       @db.Uuid
