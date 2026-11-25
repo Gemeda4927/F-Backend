@@ -71,22 +71,55 @@ try {
           data: { ...account, role_id: account.role, password_hash },
         });
       }
+      const ownerEmail = 'gemedatam@gmail.com';
       const owner = await tx.user.findFirst({ where: { role: 'SUPER_ADMIN' } });
-      if (owner) console.log('Existing Super Admin retained: ' + owner.email);
-      else {
-        const email = 'superadmin@learnova.example';
-        if (await tx.user.findUnique({ where: { email } }))
-          throw Error('Owner email already belongs to another account');
+      if (owner) {
+        const conflicting = await tx.user.findUnique({ where: { email: ownerEmail } });
+        if (conflicting && conflicting.id !== owner.id) {
+          await tx.user.update({
+            where: { id: owner.id },
+            data: { role: 'ADMIN', role_id: 'ADMIN', auth_version: { increment: 1 } },
+          });
+          await tx.authSession.updateMany({ where: { user_id: owner.id, revoked_at: null }, data: { revoked_at: new Date() } });
+          await tx.fcmToken.deleteMany({ where: { user_id: owner.id } });
+          await tx.user.update({
+            where: { id: conflicting.id },
+            data: {
+              name: 'Learnova Super Admin',
+              role: 'SUPER_ADMIN',
+              role_id: 'SUPER_ADMIN',
+              password_hash,
+              auth_version: { increment: 1 },
+            },
+          });
+          await tx.authSession.updateMany({ where: { user_id: conflicting.id, revoked_at: null }, data: { revoked_at: new Date() } });
+          await tx.fcmToken.deleteMany({ where: { user_id: conflicting.id } });
+          console.log('Transferred Super Admin to existing account: ' + ownerEmail);
+          return;
+        }
+        await tx.user.update({
+          where: { id: owner.id },
+          data: {
+            email: ownerEmail,
+            name: 'Learnova Super Admin',
+            password_hash,
+            auth_version: { increment: 1 },
+          },
+        });
+        await tx.authSession.updateMany({ where: { user_id: owner.id, revoked_at: null }, data: { revoked_at: new Date() } });
+        await tx.fcmToken.deleteMany({ where: { user_id: owner.id } });
+        console.log('Updated Super Admin: ' + ownerEmail);
+      } else {
         await tx.user.create({
           data: {
-            email,
+            email: ownerEmail,
             name: 'Learnova Super Admin',
             role: 'SUPER_ADMIN',
             role_id: 'SUPER_ADMIN',
             password_hash,
           },
         });
-        console.log('Created Super Admin: ' + email);
+        console.log('Created Super Admin: ' + ownerEmail);
       }
     },
     { isolationLevel: 'Serializable', maxWait: 30000, timeout: 120000 },

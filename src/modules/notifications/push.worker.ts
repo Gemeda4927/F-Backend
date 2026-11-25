@@ -87,7 +87,7 @@ export class PushWorker
                   entitlement: { state: 'ACTIVE' },
                   OR: [
                     { payment_id: null },
-                    { payment: { status: 'SUCCEEDED' } },
+                    { payment: { status: { in: ['SUCCEEDED', 'APPROVED'] } } },
                   ],
                 },
               },

@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { CurrentUser } from '../../common/types.js';
 import {
+  CloudinaryStorageError,
   cloudinaryConfigured,
   deleteCloudinaryImage,
   fetchCloudinaryImage,
@@ -263,13 +264,34 @@ export class CoursesService {
       where: { course_id: id },
       select: { public_id: true, storage_provider: true },
     });
-    const uploaded = await uploadCloudinaryImage(
-      content,
-      mime,
-      `learnova/course-thumbnails/${id}-${randomUUID()}`,
-    );
+    let uploaded;
     try {
-      await this.db.courseThumbnail.upsert({
+      uploaded = await uploadCloudinaryImage(
+        content,
+        mime,
+        `learnova/course-thumbnails/${id}-${randomUUID()}`,
+      );
+    } catch (error) {
+      if (error instanceof CloudinaryStorageError) {
+        if (error.code === 'permission_denied')
+          throw new ServiceUnavailableException(
+            'Cloudinary upload permission is missing. Enable create/upload permission for the backend API key.',
+          );
+        if (error.code === 'authentication_failed')
+          throw new ServiceUnavailableException(
+            'Cloudinary credentials were rejected. Check the backend Cloudinary settings.',
+          );
+        if (error.code === 'not_configured' || error.code === 'configuration_incomplete')
+          throw new ServiceUnavailableException(
+            'Cloudinary is not fully configured on the backend.',
+          );
+      }
+      throw new ServiceUnavailableException(
+        'Cloudinary could not store the course thumbnail. Check the backend storage logs.',
+      );
+    }
+    try {
+      const saved = await this.db.courseThumbnail.upsert({
         where: { course_id: id },
         create: {
           course_id: id,
@@ -286,9 +308,23 @@ export class CoursesService {
           public_id: uploaded.public_id,
           secure_url: uploaded.secure_url,
         },
+        select: {
+          course_id: true,
+          public_id: true,
+          secure_url: true,
+          storage_provider: true,
+        },
       });
+      if (
+        saved.course_id !== id ||
+        saved.storage_provider !== 'cloudinary' ||
+        saved.public_id !== uploaded.public_id ||
+        saved.secure_url !== uploaded.secure_url
+      ) {
+        throw new Error('Course thumbnail persistence verification failed');
+      }
     } catch (error) {
-      await deleteCloudinaryImage(uploaded.public_id).catch(() => undefined);
+      await deleteCloudinaryImage(uploaded.public_id, 'upload', 'image').catch(() => undefined);
       throw error;
     }
     if (previous?.storage_provider === 'cloudinary' && previous.public_id)
@@ -435,7 +471,8 @@ export class CoursesService {
       enrollment.status === 'ACTIVE' &&
       enrollment.entitlement?.state === 'ACTIVE' &&
       (!enrollment.payment_id ||
-        (enrollment.payment?.status === 'SUCCEEDED' &&
+        (enrollment.payment !== null &&
+          ['SUCCEEDED', 'APPROVED'].includes(enrollment.payment.status) &&
           enrollment.payment.user_id === user.id &&
           enrollment.payment.course_id === courseId))
     );

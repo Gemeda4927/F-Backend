@@ -92,6 +92,7 @@ export async function seedConfiguration(db: PrismaClient) {
           },
         }),
       ),
+      { maxWait: 30000, timeout: 120000 },
     );
     cursor = rows.at(-1)!.id;
   }

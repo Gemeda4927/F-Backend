@@ -60,6 +60,59 @@ import {
 } from './questions.js';
 import { notify, notifyCourse } from '../notifications/notifications.js';
 
+const QUESTION_TYPES = new Set(['MCQ', 'BLANK', 'BOOLEAN', 'SHORT', 'CODE', 'IMAGE']);
+
+/**
+ * Older seeded exams used a small question shape (string options and
+ * correctIndex) before structured question validation was introduced. Keep
+ * those exams playable while preserving the validated shape for new exams.
+ */
+function normalizeQuestionBank(value: unknown): Question[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((raw, index) => {
+    const item = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+    const id = typeof item.id === 'string' && item.id.trim()
+      ? item.id
+      : `legacy-question-${index + 1}`;
+    const rawOptions = Array.isArray(item.options) ? item.options : [];
+    const options = rawOptions.map((option, optionIndex) => {
+      if (typeof option === 'string')
+        return { id: `${id}-option-${optionIndex + 1}`, text: option };
+      const object = option && typeof option === 'object'
+        ? (option as Record<string, unknown>)
+        : {};
+      return {
+        id: typeof object.id === 'string' && object.id.trim()
+          ? object.id
+          : `${id}-option-${optionIndex + 1}`,
+        text: typeof object.text === 'string' ? object.text : String(object.label ?? ''),
+        ...(typeof object.image_id === 'string' ? { image_id: object.image_id } : {}),
+      };
+    });
+    const type = typeof item.type === 'string' && QUESTION_TYPES.has(item.type)
+      ? item.type as Question['type']
+      : options.length ? 'MCQ' : 'SHORT';
+    const correct = Array.isArray(item.correct)
+      ? item.correct.filter((answer): answer is string => typeof answer === 'string')
+      : typeof item.correctIndex === 'number' && options[item.correctIndex]
+        ? [options[item.correctIndex].id]
+        : undefined;
+    return {
+      id,
+      type,
+      question: typeof item.question === 'string' ? item.question : String(item.text ?? ''),
+      points: typeof item.points === 'number' && Number.isFinite(item.points) && item.points > 0 ? item.points : 1,
+      difficulty: item.difficulty === 'EASY' || item.difficulty === 'HARD' ? item.difficulty : 'MEDIUM',
+      explanation: typeof item.explanation === 'string' ? item.explanation : '',
+      ...(options.length ? { options } : {}),
+      ...(correct?.length ? { correct } : {}),
+      ...(typeof item.model_answer === 'string' ? { model_answer: item.model_answer } : {}),
+    };
+  });
+}
+
 class AssessmentDto {
   @IsString() @MinLength(3) @MaxLength(160) title!: string;
   @IsIn(['EXAM', 'ASSIGNMENT']) kind!: string;
@@ -481,7 +534,7 @@ export class AssessmentsController {
       const active = a.attempts.find(
         (t) => !t.submitted_at && (!t.expires_at || t.expires_at > new Date()),
       );
-      const bank = a.question_bank as Question[];
+      const bank = normalizeQuestionBank(a.question_bank);
       const effectiveReviewPolicy = [
         'AFTER_QUESTION',
         'AFTER_SUBMISSION',
@@ -718,6 +771,7 @@ export class AssessmentsController {
     const used = Math.max(latest?.number ?? 0, prior?.attempt_number ?? 0);
     if (used >= a.max_attempts)
       throw new ConflictException('Attempt limit reached');
+    const bank = normalizeQuestionBank(a.question_bank);
     const expires = a.duration_minutes
       ? new Date(Date.now() + a.duration_minutes * 60000)
       : null;
@@ -727,10 +781,10 @@ export class AssessmentsController {
         student_id: u.id,
         number: used + 1,
         question_order: a.randomize_questions
-          ? shuffled(((a.question_bank ?? []) as Question[]).map((q) => q.id))
-          : ((a.question_bank ?? []) as Question[]).map((q) => q.id),
+          ? shuffled(bank.map((q) => q.id))
+          : bank.map((q) => q.id),
         option_order: Object.fromEntries(
-          ((a.question_bank ?? []) as Question[])
+          bank
             .filter((q) => q.options)
             .map((q) => [
               q.id,
@@ -813,7 +867,7 @@ export class AssessmentsController {
         throw new ForbiddenException(
           'This attempt cannot be resumed after leaving the page',
         );
-      if (((a.question_bank ?? []) as Question[]).length)
+      if (normalizeQuestionBank(a.question_bank).length)
         return this.submitTyped(tx, u, a, attempt, dto);
       const questions = a.questions as string[];
       if (
@@ -897,7 +951,7 @@ export class AssessmentsController {
     });
   }
   private async checkImages(tx: Prisma.TransactionClient, a: Assessment) {
-    const bank = (a.question_bank ?? []) as Question[];
+    const bank = normalizeQuestionBank(a.question_bank);
     const ids = [
       ...new Set(
         bank
@@ -932,7 +986,7 @@ export class AssessmentsController {
       throw new ConflictException(
         'Answers changed in another tab. Reload before submitting',
       );
-    const bank = a.question_bank as Question[];
+    const bank = normalizeQuestionBank(a.question_bank);
     const responses = validateResponses(
       bank,
       dto.responses ?? attempt.responses,
@@ -1041,7 +1095,7 @@ export class AssessmentsController {
         throw new ConflictException(
           'Answers changed in another tab. Reload before continuing',
         );
-      const bank = a.question_bank as Question[];
+      const bank = normalizeQuestionBank(a.question_bank);
       const responses = validateResponses(bank, dto.responses);
       const marked = dto.marked ?? [];
       if (marked.some((id) => !bank.some((q) => q.id === id)))
@@ -1094,7 +1148,7 @@ export class AssessmentsController {
         });
         map.set(image.id, uploaded.id);
       }
-      const bank = (original.question_bank as Question[]).map((q) => ({
+      const bank = normalizeQuestionBank(original.question_bank).map((q) => ({
         ...q,
         image_id: q.image_id ? map.get(q.image_id) : undefined,
         options: q.options?.map((o) => ({

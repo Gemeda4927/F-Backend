@@ -79,6 +79,9 @@ model User {
   assessmentAttempts AssessmentAttempt[]
   assessmentFiles AssessmentFile[]
   courseViews    CourseView[]
+  assignmentsCreated Assignment[] @relation("AssignmentAuthor")
+  assignmentViews AssignmentView[]
+  assignmentAttempts AssignmentAccessAttempt[]
 
   @@index([role_id])
   @@map("users")
@@ -192,6 +195,7 @@ model Course {
   contributions Contribution[]
   notifications Notification[]
   views         CourseView[]
+  assignments   Assignment[]
 
   @@index([instructor_id])
   @@index([published, created_at])
@@ -291,6 +295,66 @@ model CourseView {
   @@index([student_id, opened_at])
   @@index([course_id, student_id, opened_at])
   @@map("course_views")
+}
+
+model Assignment {
+  id                     String   @id @default(uuid()) @db.Uuid
+  course_id              String   @db.Uuid
+  created_by             String   @db.Uuid
+  title                  String
+  university             String?
+  department             String?
+  program                String?
+  chapter                String   @default("")
+  description            String   @default("")
+  assignment_type        String   @default("QUESTIONS_WITH_SOLUTIONS")
+  access_type            String   @default("FREE")
+  published              Boolean  @default(false)
+  archived               Boolean  @default(false)
+  published_at           DateTime? @db.Timestamptz(6)
+  total_pages            Int      @default(0)
+  document_public_id     String?
+  document_url           String?
+  document_resource_type String?
+  document_version       Int?
+  document_bytes         Int?
+  document_mime_type     String?
+  created_at             DateTime @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  course                 Course   @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  author                 User     @relation("AssignmentAuthor", fields: [created_by], references: [id], onDelete: Restrict)
+  views                  AssignmentView[]
+  access_attempts        AssignmentAccessAttempt[]
+  @@index([course_id, published, archived])
+  @@index([created_by, created_at])
+  @@map("assignments")
+}
+
+model AssignmentView {
+  id             String   @id @default(uuid()) @db.Uuid
+  assignment_id  String   @db.Uuid
+  student_id     String   @db.Uuid
+  first_viewed   DateTime @default(now()) @db.Timestamptz(6)
+  last_viewed    DateTime @default(now()) @db.Timestamptz(6)
+  view_count     Int      @default(0)
+  last_page      Int      @default(1)
+  assignment     Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student        User       @relation(fields: [student_id], references: [id], onDelete: Restrict)
+  @@unique([assignment_id, student_id])
+  @@index([assignment_id, last_viewed])
+  @@map("assignment_views")
+}
+
+model AssignmentAccessAttempt {
+  id             String   @id @default(uuid()) @db.Uuid
+  assignment_id  String   @db.Uuid
+  student_id     String?  @db.Uuid
+  reason         String
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  assignment     Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student        User?      @relation(fields: [student_id], references: [id], onDelete: SetNull)
+  @@index([assignment_id, created_at])
+  @@map("assignment_access_attempts")
 }
 
 model Assessment {

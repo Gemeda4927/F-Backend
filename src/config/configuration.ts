@@ -47,6 +47,30 @@ export function validatePlatformEnvironment() {
   const googleSettings = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'];
   if (googleSettings.some((name) => process.env[name]) && googleSettings.some((name) => !process.env[name]))
     throw new Error('Google sign-in requires GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI');
+  if (process.env.GOOGLE_REDIRECT_URI) {
+    const redirect = new URL(process.env.GOOGLE_REDIRECT_URI);
+    if (
+      redirect.protocol !== 'http:' &&
+      redirect.protocol !== 'https:'
+    )
+      throw new Error('GOOGLE_REDIRECT_URI must use HTTP or HTTPS');
+    if (!redirect.pathname.endsWith('/api/v1/auth/google/callback'))
+      throw new Error(
+        'GOOGLE_REDIRECT_URI must point to /api/v1/auth/google/callback',
+      );
+    const isProduction =
+      (process.env.APP_ENV ?? process.env.NODE_ENV) === 'production';
+    if (isProduction) {
+      if (redirect.protocol !== 'https:' || redirect.hostname === 'localhost')
+        throw new Error(
+          'Production GOOGLE_REDIRECT_URI must be an HTTPS public backend URL',
+        );
+      if (process.env.BACKEND_URL && redirect.origin !== process.env.BACKEND_URL)
+        throw new Error(
+          'Production GOOGLE_REDIRECT_URI origin must match BACKEND_URL',
+        );
+    }
+  }
   if (
     !['postgres:', 'postgresql:'].includes(
       new URL(process.env.DATABASE_URL!).protocol,

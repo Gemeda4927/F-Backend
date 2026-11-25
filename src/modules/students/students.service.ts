@@ -85,7 +85,7 @@ export class StudentsService {
     return envelope(rows.map(({ course, ...r }) => {
       const completed = course.lessons.reduce((sum, l) => sum + l._count.progress, 0), count = course._count.lessons;
       return { ...r, title: course.title, instructor: course.instructor.name, lesson_count: count, completed_count: completed, progress: count ? Math.round(completed / count * 100) : 0,
-        completed: count > 0 && completed >= count, access: course.published && r.status === 'ACTIVE' && r.entitlement?.state === 'ACTIVE' && (!r.payment_id || r.payment?.status === 'SUCCEEDED') };
+        completed: count > 0 && completed >= count, access: course.published && r.status === 'ACTIVE' && r.entitlement?.state === 'ACTIVE' && (!r.payment_id || ['SUCCEEDED', 'APPROVED'].includes(r.payment?.status ?? '')) };
     }), total, q);
   }
   async payments(id: string, q: PageDto) {

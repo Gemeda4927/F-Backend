@@ -1,8 +1,8 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { CurrentUser } from '../../common/types.js';
-import { deleteCloudinaryImage, uploadCloudinaryImage } from '../../common/cloudinary.js';
+import { deleteCloudinaryImage, uploadCloudinaryImage, CloudinaryStorageError } from '../../common/cloudinary.js';
 import type { AuthAppearanceDto } from './auth-appearance.dto.js';
 
 export const DEFAULT_AUTH_APPEARANCE = {
@@ -39,7 +39,31 @@ export class AuthAppearanceService {
       const mime = b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png' : b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? 'image/jpeg' : b.length > 12 && b.subarray(0, 4).toString() === 'RIFF' && b.subarray(8, 12).toString() === 'WEBP' ? 'image/webp' : null;
       if (!mime) throw new ConflictException('Background must be a valid PNG, JPEG, or WebP image');
       const previous = await this.db.authAppearance.findUnique({ where: { id: 'default' }, select: { public_id: true } });
-      const uploaded = await uploadCloudinaryImage(b, mime, `learnova/auth-backgrounds/${randomUUID()}`);
+      let uploaded;
+      try {
+        uploaded = await uploadCloudinaryImage(b, mime, `learnova/auth-backgrounds/${randomUUID()}`);
+      } catch (error) {
+        if (error instanceof CloudinaryStorageError) {
+          if (error.code === 'permission_denied') {
+            throw new ServiceUnavailableException(
+              'Cloudinary upload permission is missing. Enable create/upload permission for the backend API key.',
+            );
+          }
+          if (error.code === 'authentication_failed') {
+            throw new ServiceUnavailableException(
+              'Cloudinary credentials were rejected. Check the backend Cloudinary environment variables.',
+            );
+          }
+          if (error.code === 'not_configured' || error.code === 'configuration_incomplete') {
+            throw new ServiceUnavailableException(
+              'Cloudinary is not fully configured on the backend.',
+            );
+          }
+        }
+        throw new ServiceUnavailableException(
+          'Cloudinary could not store the background image. Try again after checking the backend storage logs.',
+        );
+      }
       try {
         await this.db.authAppearance.upsert({ where: { id: 'default' }, create: { id: 'default', headline: dto.headline ?? DEFAULT_AUTH_APPEARANCE.headline, description: dto.description ?? DEFAULT_AUTH_APPEARANCE.description, slogan: dto.slogan ?? DEFAULT_AUTH_APPEARANCE.slogan, overlay_opacity: opacity ?? DEFAULT_AUTH_APPEARANCE.overlay_opacity, public_id: uploaded.public_id, secure_url: uploaded.secure_url, mime_type: mime }, update: { ...(dto.headline !== undefined && { headline: dto.headline }), ...(dto.description !== undefined && { description: dto.description }), ...(dto.slogan !== undefined && { slogan: dto.slogan }), ...(opacity !== undefined && { overlay_opacity: opacity }), public_id: uploaded.public_id, secure_url: uploaded.secure_url, mime_type: mime } });
       } catch (error) { await deleteCloudinaryImage(uploaded.public_id).catch(() => undefined); throw error; }

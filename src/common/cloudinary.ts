@@ -1,21 +1,42 @@
 import { createHash } from 'node:crypto';
+import { Logger } from '@nestjs/common';
+
+const logger = new Logger('Cloudinary');
+
+export type CloudinaryFailureCode =
+  | 'not_configured'
+  | 'configuration_incomplete'
+  | 'permission_denied'
+  | 'authentication_failed'
+  | 'request_rejected'
+  | 'service_unavailable';
+
+export class CloudinaryStorageError extends Error {
+  constructor(
+    public readonly code: CloudinaryFailureCode,
+    message: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'CloudinaryStorageError';
+  }
+}
 
 type CloudinaryAsset = {
   public_id: string;
   secure_url: string;
   resource_type: string;
   bytes: number;
+  version?: number;
 };
 
 function config() {
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-  if (
-    [cloudName, apiKey, apiSecret].some(Boolean) &&
-    !(cloudName && apiKey && apiSecret)
-  )
-    throw new Error(
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+  const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
+  const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+  if ([cloudName, apiKey, apiSecret].some(Boolean) && !(cloudName && apiKey && apiSecret))
+    throw new CloudinaryStorageError(
+      'configuration_incomplete',
       'Cloudinary configuration requires cloud name, API key, and API secret',
     );
   return cloudName && apiKey && apiSecret
@@ -43,9 +64,14 @@ export async function uploadCloudinaryFile(
   mimeType: string,
   publicId: string,
   deliveryType: 'upload' | 'authenticated' = 'upload',
+  resourceTypeOverride: 'image' | 'raw' | 'auto' = 'auto',
 ): Promise<CloudinaryAsset> {
   const settings = config();
-  if (!settings) throw new Error('Cloudinary storage is not configured');
+  if (!settings)
+    throw new CloudinaryStorageError(
+      'not_configured',
+      'Cloudinary storage is not configured',
+    );
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const params = {
     invalidate: 'true',
@@ -53,7 +79,9 @@ export async function uploadCloudinaryFile(
     public_id: publicId,
     timestamp,
   };
-  const resourceType = mimeType === 'application/pdf' ? 'raw' : 'image';
+  const resourceType = resourceTypeOverride === 'auto'
+    ? (mimeType === 'application/pdf' ? 'raw' : 'image')
+    : resourceTypeOverride;
   const form = new FormData();
   form.append(
     'file',
@@ -70,35 +98,58 @@ export async function uploadCloudinaryFile(
   );
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    throw new Error(
-      `Cloudinary upload failed (${response.status})${detail ? `: ${detail.slice(0, 300)}` : ''}`,
-    );
+    const lower = detail.toLowerCase();
+    const code: CloudinaryFailureCode =
+      response.status === 401 || lower.includes('invalid api')
+        ? 'authentication_failed'
+        : response.status === 403 &&
+            (lower.includes('permission') || lower.includes('forbidden'))
+          ? 'permission_denied'
+          : response.status >= 500
+            ? 'service_unavailable'
+            : 'request_rejected';
+    const safeMessage =
+      code === 'permission_denied'
+        ? 'Cloudinary rejected the upload because this API key does not have create/upload permission.'
+        : code === 'authentication_failed'
+          ? 'Cloudinary rejected the upload credentials.'
+          : `Cloudinary rejected the upload (HTTP ${response.status}).`;
+    logger.error(`${safeMessage} status=${response.status} detail=${detail.slice(0, 500)}`);
+    throw new CloudinaryStorageError(code, safeMessage, response.status);
   }
   const result = (await response.json()) as Partial<CloudinaryAsset>;
   if (!result.public_id || !result.secure_url)
-    throw new Error('Cloudinary returned an incomplete upload response');
+    throw new CloudinaryStorageError(
+      'request_rejected',
+      'Cloudinary returned an incomplete upload response',
+    );
   return {
     public_id: result.public_id,
     secure_url: result.secure_url,
     resource_type: resourceType,
     bytes: Number((result as { bytes?: number }).bytes ?? content.byteLength),
+    version: Number((result as { version?: number }).version ?? 0) || undefined,
   };
 }
 
 export const uploadCloudinaryImage = uploadCloudinaryFile;
 
-export async function deleteCloudinaryImage(publicId: string) {
+export async function deleteCloudinaryImage(
+  publicId: string,
+  deliveryType: 'upload' | 'authenticated' = 'upload',
+  resourceType: 'image' | 'raw' = 'image',
+) {
   const settings = config();
   if (!settings) return;
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const params = { invalidate: 'true', public_id: publicId, timestamp };
+  const params = { invalidate: 'true', public_id: publicId, timestamp, ...(deliveryType !== 'upload' ? { type: deliveryType } : {}) };
   const form = new URLSearchParams({
     ...params,
     api_key: settings.apiKey,
     signature: signature(params, settings.apiSecret),
   });
   const response = await fetch(
-    `https://api.cloudinary.com/v1_1/${settings.cloudName}/image/destroy`,
+    `https://api.cloudinary.com/v1_1/${settings.cloudName}/${resourceType}/destroy`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

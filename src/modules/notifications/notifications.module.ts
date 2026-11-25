@@ -60,7 +60,7 @@ export function notificationScope(
                       entitlement: { state: 'ACTIVE' },
                       OR: [
                         { payment_id: null },
-                        { payment: { status: 'SUCCEEDED' } },
+                        { payment: { status: { in: ['SUCCEEDED', 'APPROVED'] } } },
                       ],
                     },
                   },
@@ -91,7 +91,7 @@ export class NotificationsController {
               user_id: u.id,
               status: 'ACTIVE',
               entitlement: { state: 'ACTIVE' },
-              OR: [{ payment_id: null }, { payment: { status: 'SUCCEEDED' } }],
+              OR: [{ payment_id: null }, { payment: { status: { in: ['SUCCEEDED', 'APPROVED'] } } }],
             },
           },
         },

@@ -35,7 +35,7 @@ export async function notifyCourse(
       status: 'ACTIVE',
       entitlement: { state: 'ACTIVE' },
       user: { active: true, suspended: false },
-      OR: [{ payment_id: null }, { payment: { status: 'SUCCEEDED' } }],
+      OR: [{ payment_id: null }, { payment: { status: { in: ['SUCCEEDED', 'APPROVED'] } } }],
     },
     select: { user_id: true },
   });

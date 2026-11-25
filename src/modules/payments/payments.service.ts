@@ -15,7 +15,11 @@ import { audit } from '../audit/audit.js';
 import { ChapaGateway, minorUnits, chapaDescription } from './chapa.gateway.js';
 import type { CreatePaymentDto } from './payments.dto.js';
 import type { ManualPaymentDto } from './payments.dto.js';
-import { uploadCloudinaryFile } from '../../common/cloudinary.js';
+import {
+  CloudinaryStorageError,
+  deleteCloudinaryImage,
+  uploadCloudinaryFile,
+} from '../../common/cloudinary.js';
 export function validWebhook(
   raw: Buffer,
   signature: string | undefined,
@@ -73,13 +77,50 @@ export class PaymentsService {
     const prior = await this.db.payment.findFirst({ where: { user_id: user.id, course_id: course.id, status: 'PENDING' }, orderBy: { created_at: 'desc' } });
     if (prior) return prior;
     let asset: { public_id: string; secure_url: string; resource_type: string; bytes: number } | undefined;
-    if (file) asset = await uploadCloudinaryFile(file.buffer, file.mimetype, `learnova/payment-receipts/${randomUUID()}`, 'authenticated');
-    return this.db.payment.create({ data: {
-      user_id: user.id, course_id: course.id, tx_ref: 'manual-' + randomUUID(), mode: 'manual', amount_minor: amount, currency: course.currency,
-      idempotency_key: randomUUID(), payment_method: dto.payment_method, payer_name: dto.payer_name.trim(), provider_ref: reference || null,
-      payment_date: new Date(dto.payment_date), admin_remark: dto.notes?.trim() || null, receipt_public_id: asset?.public_id, receipt_resource_type: asset?.resource_type,
-      receipt_url: asset?.secure_url, receipt_original_name: file?.originalname, receipt_mime_type: file?.mimetype, receipt_bytes: asset?.bytes,
-    } });
+    if (file) {
+      try {
+        asset = await uploadCloudinaryFile(
+          file.buffer,
+          file.mimetype,
+          `learnova/payment-receipts/${randomUUID()}`,
+          'authenticated',
+        );
+      } catch (error) {
+        if (error instanceof CloudinaryStorageError) {
+          if (error.code === 'permission_denied')
+            throw new ConflictException(
+              'Receipt storage is not enabled. The backend Cloudinary API key needs create/upload permission.',
+            );
+          if (error.code === 'authentication_failed')
+            throw new ConflictException(
+              'Receipt storage credentials were rejected. Check the backend Cloudinary settings.',
+            );
+          if (error.code === 'not_configured' || error.code === 'configuration_incomplete')
+            throw new ConflictException(
+              'Receipt storage is not configured on the backend.',
+            );
+        }
+        throw new ConflictException(
+          'The receipt could not be stored. Please try again or submit a transaction reference.',
+        );
+      }
+    }
+    try {
+      return await this.db.payment.create({ data: {
+        user_id: user.id, course_id: course.id, tx_ref: 'manual-' + randomUUID(), mode: 'manual', amount_minor: amount, currency: course.currency,
+        idempotency_key: randomUUID(), payment_method: dto.payment_method, payer_name: dto.payer_name.trim(), provider_ref: reference || null,
+        payment_date: new Date(dto.payment_date), admin_remark: dto.notes?.trim() || null, receipt_public_id: asset?.public_id, receipt_resource_type: asset?.resource_type,
+        receipt_url: asset?.secure_url, receipt_original_name: file?.originalname, receipt_mime_type: file?.mimetype, receipt_bytes: asset?.bytes,
+      } });
+    } catch (error) {
+      if (asset?.public_id)
+        await deleteCloudinaryImage(
+          asset.public_id,
+          'authenticated',
+          asset.resource_type === 'raw' ? 'raw' : 'image',
+        ).catch(() => undefined);
+      throw error;
+    }
   }
   async decideManual(actor: CurrentUser, id: string, approve: boolean, remark?: string) {
     return this.db.atomic(async (tx) => {
@@ -88,11 +129,21 @@ export class PaymentsService {
       if (payment.mode !== 'manual') throw new ConflictException('Only manual payments use this review workflow');
       if (payment.status !== 'PENDING') return payment;
       if (approve && payment.provider_ref) {
-        const duplicate = await tx.payment.findFirst({ where: { provider_ref: payment.provider_ref, status: 'SUCCEEDED', NOT: { id } } });
+        const duplicate = await tx.payment.findFirst({ where: { provider_ref: payment.provider_ref, status: { in: ['SUCCEEDED', 'APPROVED'] }, NOT: { id } } });
         if (duplicate) throw new ConflictException('This transaction reference has already been verified for another purchase');
       }
       const status = approve ? 'APPROVED' : 'REJECTED';
       const updated = await tx.payment.update({ where: { id, status: 'PENDING' }, data: { status, verified_at: new Date(), verified_by: actor.id, admin_remark: remark?.trim() || null } });
+      await notify(tx, [payment.user_id], {
+        event_key: `payment:${payment.id}:${approve ? 'approved' : 'rejected'}`,
+        kind: 'PAYMENT',
+        title: approve ? 'Payment approved' : 'Payment rejected',
+        message: approve
+          ? `Your payment for ${payment.course.title} was approved. Course access is now available.`
+          : `Your payment for ${payment.course.title} was rejected.${remark?.trim() ? ` Reason: ${remark.trim()}` : ''}`,
+        href: `/payments?reference=${payment.tx_ref}`,
+        course_id: payment.course_id,
+      });
       if (!approve) return updated;
       const enrollment = await tx.enrollment.upsert({ where: { user_id_course_id: { user_id: payment.user_id, course_id: payment.course_id } }, update: { status: 'ACTIVE', payment_id: payment.id }, create: { user_id: payment.user_id, course_id: payment.course_id, payment_id: payment.id, status: 'ACTIVE' } });
       await tx.courseEntitlement.upsert({ where: { enrollment_id: enrollment.id }, update: { state: 'ACTIVE', revoked_at: null }, create: { enrollment_id: enrollment.id, state: 'ACTIVE' } });
@@ -224,13 +275,14 @@ export class PaymentsService {
   async mine(user: CurrentUser) {
     const rows = await this.db.payment.findMany({
       where: { user_id: user.id },
-      include: { course: { select: { title: true } } },
+      include: { course: { select: { title: true, thumbnail: { select: { secure_url: true } } } } },
       orderBy: { created_at: 'desc' },
       take: 100,
     });
     return rows.map(({ course, ...p }) => ({
       ...p,
       course_title: course.title,
+      course_thumbnail_url: course.thumbnail?.secure_url ?? null,
     }));
   }
   async status(user: CurrentUser, reference: string) {
@@ -240,7 +292,9 @@ export class PaymentsService {
     });
     if (!payment) throw new NotFoundException('Payment not found');
     if (payment.refund) await this.verifyRefund(payment.id);
-    if (payment.status === 'PENDING') await this.verify(reference);
+    // Manual payments are verified by an administrator, never by Chapa.
+    if (payment.mode !== 'manual' && payment.status === 'PENDING')
+      await this.verify(reference);
     const result = await this.db.payment.findUniqueOrThrow({ where: { id: payment.id }, include: { course: { select: { title: true } } } });
     const { course, ...safe } = result;
     return { ...safe, course_title: course.title };
@@ -394,7 +448,7 @@ export class PaymentsService {
   async review() {
     const rows = await this.db.payment.findMany({
       include: {
-        user: { select: { email: true } },
+        user: { select: { email: true, name: true } },
         course: { select: { title: true } },
         refund: { select: { status: true } },
       },
@@ -404,6 +458,7 @@ export class PaymentsService {
     return rows.map(({ user, course, refund, ...p }) => ({
       ...p,
       email: user.email,
+      student_name: user.name,
       course_title: course.title,
       refund_status: refund?.status ?? null,
     }));

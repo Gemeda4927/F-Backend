@@ -347,6 +347,7 @@ export class AuthService {
     });
     if (user) {
       const token = randomBytes(32).toString('hex');
+      await this.mail.sendReset(email, token);
       await this.db.atomic(async (tx) => {
         await tx.passwordResetToken.updateMany({
           where: { user_id: user.id, consumed_at: null },
@@ -360,7 +361,6 @@ export class AuthService {
           },
         });
       });
-      await this.mail.sendReset(email, token);
     }
     return {
       message:
