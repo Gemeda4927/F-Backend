@@ -219,6 +219,31 @@ export class LessonsService {
       where: { user_id: user.id, lesson: { course_id: courseId } },
     });
   }
+  async sectionProgress(user: CurrentUser, id: string) {
+    const lesson = await this.authorized(user, id);
+    if (!(await this.courses.canAccess(user, lesson.course_id)))
+      throw new ForbiddenException('Enrollment required');
+    return this.db.lessonSectionProgress.findMany({
+      where: { user_id: user.id, lesson_id: id },
+      select: { section_id: true, completed_at: true, last_visited: true },
+      orderBy: { completed_at: 'asc' },
+    });
+  }
+  async completeSection(user: CurrentUser, id: string, sectionId: string) {
+    if (user.role !== 'STUDENT')
+      throw new ForbiddenException('Only student accounts record learning progress');
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(sectionId) || sectionId.length > 180)
+      throw new BadRequestException('Invalid section identifier');
+    const lesson = await this.authorized(user, id);
+    if (!(await this.courses.canAccess(user, lesson.course_id)))
+      throw new ForbiddenException('Enrollment required');
+    return this.db.lessonSectionProgress.upsert({
+      where: { user_id_lesson_id_section_id: { user_id: user.id, lesson_id: id, section_id: sectionId } },
+      create: { user_id: user.id, lesson_id: id, section_id: sectionId },
+      update: { completed_at: new Date(), last_visited: new Date() },
+      select: { section_id: true, completed_at: true, last_visited: true },
+    });
+  }
   async complete(user: CurrentUser, id: string, answers?: number[]) {
     if (user.role !== 'STUDENT')
       throw new ForbiddenException(

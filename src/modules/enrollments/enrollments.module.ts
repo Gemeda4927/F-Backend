@@ -26,6 +26,7 @@ class EnrollmentsController {
       include: {
         course: {
           include: {
+            thumbnail: { select: { secure_url: true } },
             _count: {
               select: { lessons: { where: { status: 'PUBLISHED' } } },
             },
@@ -41,13 +42,15 @@ class EnrollmentsController {
       orderBy: { created_at: 'desc' },
     });
     return rows.map(({ course, status, created_at }) => {
-      const { _count, lessons, ...safe } = course;
+      const { _count, lessons, thumbnail, ...safe } = course;
       return {
         ...safe,
         status,
         enrolled_at: created_at,
         lesson_count: _count.lessons,
         completed_count: lessons.reduce((sum, l) => sum + l._count.progress, 0),
+        has_thumbnail: !!thumbnail,
+        thumbnail_url: thumbnail?.secure_url ?? null,
       };
     });
   }

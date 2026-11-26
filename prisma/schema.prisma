@@ -47,56 +47,64 @@ enum ExamType {
 }
 
 model User {
-  id             String               @id @default(uuid()) @db.Uuid
-  email          String               @unique
-  password_hash  String
-  name           String
-  role           String               @default("STUDENT")
-  role_id        String?
-  roleDefinition Role?                @relation(fields: [role_id], references: [id], onDelete: Restrict)
-  active         Boolean              @default(true)
-  suspended      Boolean              @default(false)
-  phone          String?
-  last_login_at  DateTime?             @db.Timestamptz(6)
-  auth_version   Int                  @default(0)
-  created_at     DateTime             @default(now()) @db.Timestamptz(6)
-  sessions       AuthSession[]
-  providerAccounts AuthProviderAccount[]
-  fcmTokens      FcmToken[]
-  resets         PasswordResetToken[]
-  courses        Course[]
-  payments       Payment[]
-  enrollments    Enrollment[]
-  progress       LearningProgress[]
-  auditLogs      AuditLog[]
-  refunds        Refund[]
-  assessmentSubmissions AssessmentSubmission[]
-  contributions Contribution[] @relation("ContributionAuthor")
-  verifiedContributions Contribution[] @relation("ContributionVerifier")
-  contributionVotes ContributionVote[]
-  creditEvents ContributionCreditEvent[]
-  notifications Notification[]
-  assessmentAttempts AssessmentAttempt[]
-  assessmentFiles AssessmentFile[]
-  courseViews    CourseView[]
-  assignmentsCreated Assignment[] @relation("AssignmentAuthor")
-  assignmentViews AssignmentView[]
-  assignmentAttempts AssignmentAccessAttempt[]
+  id                      String                     @id @default(uuid()) @db.Uuid
+  email                   String                     @unique
+  password_hash           String
+  name                    String
+  role                    String                     @default("STUDENT")
+  role_id                 String?
+  roleDefinition          Role?                      @relation(fields: [role_id], references: [id], onDelete: Restrict)
+  active                  Boolean                    @default(true)
+  suspended               Boolean                    @default(false)
+  phone                   String?
+  last_login_at           DateTime?                  @db.Timestamptz(6)
+  auth_version            Int                        @default(0)
+  created_at              DateTime                   @default(now()) @db.Timestamptz(6)
+  sessions                AuthSession[]
+  providerAccounts        AuthProviderAccount[]
+  fcmTokens               FcmToken[]
+  resets                  PasswordResetToken[]
+  courses                 Course[]
+  payments                Payment[]
+  enrollments             Enrollment[]
+  progress                LearningProgress[]
+  auditLogs               AuditLog[]
+  refunds                 Refund[]
+  assessmentSubmissions   AssessmentSubmission[]
+  contributions           Contribution[]             @relation("ContributionAuthor")
+  verifiedContributions   Contribution[]             @relation("ContributionVerifier")
+  contributionVotes       ContributionVote[]
+  creditEvents            ContributionCreditEvent[]
+  notifications           Notification[]
+  assessmentAttempts      AssessmentAttempt[]
+  assessmentFiles         AssessmentFile[]
+  courseViews             CourseView[]
+  assignmentsCreated      Assignment[]               @relation("AssignmentAuthor")
+  assignmentViews         AssignmentView[]
+  assignmentAttempts      AssignmentAccessAttempt[]
+  sectionProgress         LessonSectionProgress[]
+  taskAttachmentsUploaded AssignmentTaskAttachment[] @relation("TaskAttachmentUploader")
+  taskSubmissions         AssignmentSubmission[]     @relation("TaskSubmissionStudent")
+  taskReviews             AssignmentSubmission[]     @relation("TaskSubmissionReviewer")
+  taskEvaluations         AssignmentEvaluation[]     @relation("TaskEvaluationEvaluator")
+  competitionsCreated     CourseCompetition[]        @relation("CompetitionCreator")
+  competitionEvents       CompetitionPointEvent[]
+  competitionVisibility   CompetitionVisibility[]
 
   @@index([role_id])
   @@map("users")
 }
 
 model AuthProviderAccount {
-  id                 String   @id @default(uuid()) @db.Uuid
-  user_id            String   @db.Uuid
-  provider           String
+  id                  String   @id @default(uuid()) @db.Uuid
+  user_id             String   @db.Uuid
+  provider            String
   provider_account_id String
-  email              String?
-  email_verified     Boolean  @default(false)
-  created_at         DateTime @default(now()) @db.Timestamptz(6)
-  updated_at         DateTime @updatedAt @db.Timestamptz(6)
-  user               User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  email               String?
+  email_verified      Boolean  @default(false)
+  created_at          DateTime @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime @updatedAt @db.Timestamptz(6)
+  user                User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([provider, provider_account_id])
   @@unique([user_id, provider])
@@ -133,13 +141,13 @@ model RolePermission {
 }
 
 model AuthSession {
-  id            String         @id @default(uuid()) @db.Uuid
-  user_id       String         @db.Uuid
-  refresh_hash  String
-  expires_at    DateTime       @db.Timestamptz(6)
-  revoked_at    DateTime?      @db.Timestamptz(6)
-  created_at    DateTime       @default(now()) @db.Timestamptz(6)
-  user          User           @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  id           String    @id @default(uuid()) @db.Uuid
+  user_id      String    @db.Uuid
+  refresh_hash String
+  expires_at   DateTime  @db.Timestamptz(6)
+  revoked_at   DateTime? @db.Timestamptz(6)
+  created_at   DateTime  @default(now()) @db.Timestamptz(6)
+  user         User      @relation(fields: [user_id], references: [id], onDelete: Restrict)
 
   @@index([user_id], map: "sessions_user")
   @@map("sessions")
@@ -173,96 +181,173 @@ model PasswordResetToken {
 }
 
 model Course {
-  id            String       @id @default(uuid()) @db.Uuid
-  instructor_id String       @db.Uuid
-  title         String
-  description   String
-  category      String       @default("General")
-  price_minor   Int
-  currency      String       @default("ETB")
-  published     Boolean      @default(false)
-  visibility    CourseVisibility @default(PRIVATE)
-  archived_at   DateTime?    @db.Timestamptz(6)
-  created_at    DateTime     @default(now()) @db.Timestamptz(6)
-  updated_at    DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
-  instructor    User         @relation(fields: [instructor_id], references: [id], onDelete: Restrict)
-  lessons       Lesson[]
-  chapters      Chapter[]
-  enrollments   Enrollment[]
-  payments      Payment[]
-  assessments   Assessment[]
-  thumbnail     CourseThumbnail?
-  contributions Contribution[]
-  notifications Notification[]
-  views         CourseView[]
-  assignments   Assignment[]
+  id                String                  @id @default(uuid()) @db.Uuid
+  instructor_id     String                  @db.Uuid
+  title             String
+  description       String
+  category          String                  @default("General")
+  price_minor       Int
+  currency          String                  @default("ETB")
+  published         Boolean                 @default(false)
+  visibility        CourseVisibility        @default(PRIVATE)
+  archived_at       DateTime?               @db.Timestamptz(6)
+  created_at        DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
+  instructor        User                    @relation(fields: [instructor_id], references: [id], onDelete: Restrict)
+  lessons           Lesson[]
+  chapters          Chapter[]
+  enrollments       Enrollment[]
+  payments          Payment[]
+  assessments       Assessment[]
+  thumbnail         CourseThumbnail?
+  contributions     Contribution[]
+  notifications     Notification[]
+  views             CourseView[]
+  assignments       Assignment[]
+  competition       CourseCompetition?
+  competitionEvents CompetitionPointEvent[]
 
   @@index([instructor_id])
   @@index([published, created_at])
   @@map("courses")
 }
 
+model CourseCompetition {
+  id           String                  @id @default(uuid()) @db.Uuid
+  course_id    String                  @unique @db.Uuid
+  title        String                  @default("Course competition")
+  status       String                  @default("ACTIVE")
+  timezone     String                  @default("Africa/Nairobi")
+  starts_at    DateTime?               @db.Timestamptz(6)
+  ends_at      DateTime?               @db.Timestamptz(6)
+  rule_version Int                     @default(1)
+  created_by   String                  @db.Uuid
+  created_at   DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime                @updatedAt @db.Timestamptz(6)
+  course       Course                  @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  creator      User                    @relation("CompetitionCreator", fields: [created_by], references: [id], onDelete: Restrict)
+  rules        CompetitionPointRule[]
+  events       CompetitionPointEvent[]
+  visibility   CompetitionVisibility[]
+
+  @@index([status, starts_at, ends_at])
+  @@map("course_competitions")
+}
+
+model CompetitionPointRule {
+  id             String            @id @default(uuid()) @db.Uuid
+  competition_id String            @db.Uuid
+  version        Int
+  category       String
+  points         Int
+  enabled        Boolean           @default(true)
+  competition    CourseCompetition @relation(fields: [competition_id], references: [id], onDelete: Cascade)
+
+  @@unique([competition_id, version, category])
+  @@map("competition_point_rules")
+}
+
+model CompetitionPointEvent {
+  id              String            @id @default(uuid()) @db.Uuid
+  competition_id  String            @db.Uuid
+  course_id       String            @db.Uuid
+  student_id      String            @db.Uuid
+  category        String
+  source_type     String
+  source_id       String
+  idempotency_key String            @unique
+  points          Int
+  reason          String
+  created_at      DateTime          @default(now()) @db.Timestamptz(6)
+  competition     CourseCompetition @relation(fields: [competition_id], references: [id], onDelete: Cascade)
+  course          Course            @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  student         User              @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@index([competition_id, student_id, created_at])
+  @@index([course_id, category, created_at])
+  @@map("competition_point_events")
+}
+
+model CompetitionVisibility {
+  id             String            @id @default(uuid()) @db.Uuid
+  competition_id String            @db.Uuid
+  student_id     String            @db.Uuid
+  display_name   String?
+  show_on_board  Boolean           @default(true)
+  opt_out        Boolean           @default(false)
+  updated_at     DateTime          @updatedAt @db.Timestamptz(6)
+  competition    CourseCompetition @relation(fields: [competition_id], references: [id], onDelete: Cascade)
+  student        User              @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([competition_id, student_id])
+  @@map("competition_visibility")
+}
+
 model Contribution {
-  id          String @id @default(uuid()) @db.Uuid
-  course_id   String @db.Uuid
-  author_id   String @db.Uuid
-  kind        String
-  content     String
-  status      String @default("PENDING")
-  verifier_id String? @db.Uuid
-  verified_at DateTime? @db.Timestamptz(6)
-  revoked_at  DateTime? @db.Timestamptz(6)
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-  course      Course @relation(fields: [course_id], references: [id], onDelete: Restrict)
-  author      User @relation("ContributionAuthor", fields: [author_id], references: [id], onDelete: Restrict)
-  verifier    User? @relation("ContributionVerifier", fields: [verifier_id], references: [id], onDelete: Restrict)
-  votes       ContributionVote[]
+  id            String                    @id @default(uuid()) @db.Uuid
+  course_id     String                    @db.Uuid
+  author_id     String                    @db.Uuid
+  kind          String
+  content       String
+  status        String                    @default("PENDING")
+  verifier_id   String?                   @db.Uuid
+  verified_at   DateTime?                 @db.Timestamptz(6)
+  revoked_at    DateTime?                 @db.Timestamptz(6)
+  created_at    DateTime                  @default(now()) @db.Timestamptz(6)
+  course        Course                    @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  author        User                      @relation("ContributionAuthor", fields: [author_id], references: [id], onDelete: Restrict)
+  verifier      User?                     @relation("ContributionVerifier", fields: [verifier_id], references: [id], onDelete: Restrict)
+  votes         ContributionVote[]
   credit_events ContributionCreditEvent[]
+
   @@index([course_id, created_at])
   @@map("contributions")
 }
 
 model ContributionVote {
-  contribution_id String @db.Uuid
-  user_id String @db.Uuid
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  contribution Contribution @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
-  user User @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  contribution_id String       @db.Uuid
+  user_id         String       @db.Uuid
+  created_at      DateTime     @default(now()) @db.Timestamptz(6)
+  contribution    Contribution @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Restrict)
+
   @@id([contribution_id, user_id])
   @@map("contribution_votes")
 }
 
 model ContributionCreditEvent {
-  id String @id @default(uuid()) @db.Uuid
-  contribution_id String @db.Uuid
-  user_id String @db.Uuid
-  event String
-  amount Int
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  contribution Contribution @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
-  user User @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  id              String       @id @default(uuid()) @db.Uuid
+  contribution_id String       @db.Uuid
+  user_id         String       @db.Uuid
+  event           String
+  amount          Int
+  created_at      DateTime     @default(now()) @db.Timestamptz(6)
+  contribution    Contribution @relation(fields: [contribution_id], references: [id], onDelete: Restrict)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Restrict)
+
   @@unique([contribution_id, event])
   @@index([user_id, created_at])
   @@map("contribution_credit_events")
 }
 
 model ContributionCreditConfig {
-  id String @id @default("default")
-  answer Int @default(10)
-  correction Int @default(5)
-  resource Int @default(3)
+  id         String @id @default("default")
+  answer     Int    @default(10)
+  correction Int    @default(5)
+  resource   Int    @default(3)
+
   @@map("contribution_credit_config")
 }
 
 model CourseThumbnail {
-  course_id  String   @id @db.Uuid
-  content    Bytes?
-  mime_type  String
-  storage_provider String @default("database")
-  public_id String?
-  secure_url String?
-  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(6)
-  course     Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  course_id        String   @id @db.Uuid
+  content          Bytes?
+  mime_type        String
+  storage_provider String   @default("database")
+  public_id        String?
+  secure_url       String?
+  updated_at       DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  course           Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
 
   @@map("course_thumbnails")
 }
@@ -282,14 +367,14 @@ model AuthAppearance {
 }
 
 model CourseView {
-  id                 String   @id @default(uuid()) @db.Uuid
-  course_id          String   @db.Uuid
-  student_id         String   @db.Uuid
-  session_key        String   @unique
-  opened_at          DateTime @default(now()) @db.Timestamptz(6)
-  last_seen_at       DateTime @default(now()) @db.Timestamptz(6)
-  course             Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
-  student            User     @relation(fields: [student_id], references: [id], onDelete: Restrict)
+  id           String   @id @default(uuid()) @db.Uuid
+  course_id    String   @db.Uuid
+  student_id   String   @db.Uuid
+  session_key  String   @unique
+  opened_at    DateTime @default(now()) @db.Timestamptz(6)
+  last_seen_at DateTime @default(now()) @db.Timestamptz(6)
+  course       Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  student      User     @relation(fields: [student_id], references: [id], onDelete: Restrict)
 
   @@index([course_id, opened_at])
   @@index([student_id, opened_at])
@@ -298,101 +383,206 @@ model CourseView {
 }
 
 model Assignment {
-  id                     String   @id @default(uuid()) @db.Uuid
-  course_id              String   @db.Uuid
-  created_by             String   @db.Uuid
+  id                     String                      @id @default(uuid()) @db.Uuid
+  course_id              String                      @db.Uuid
+  created_by             String                      @db.Uuid
   title                  String
   university             String?
   department             String?
   program                String?
-  chapter                String   @default("")
-  description            String   @default("")
-  assignment_type        String   @default("QUESTIONS_WITH_SOLUTIONS")
-  access_type            String   @default("FREE")
-  published              Boolean  @default(false)
-  archived               Boolean  @default(false)
-  published_at           DateTime? @db.Timestamptz(6)
-  total_pages            Int      @default(0)
+  chapter                String                      @default("")
+  description            String                      @default("")
+  assignment_type        String                      @default("QUESTIONS_WITH_SOLUTIONS")
+  access_type            String                      @default("FREE")
+  published              Boolean                     @default(false)
+  archived               Boolean                     @default(false)
+  published_at           DateTime?                   @db.Timestamptz(6)
+  total_pages            Int                         @default(0)
   document_public_id     String?
   document_url           String?
   document_resource_type String?
   document_version       Int?
   document_bytes         Int?
   document_mime_type     String?
-  created_at             DateTime @default(now()) @db.Timestamptz(6)
-  updated_at             DateTime @default(now()) @updatedAt @db.Timestamptz(6)
-  course                 Course   @relation(fields: [course_id], references: [id], onDelete: Restrict)
-  author                 User     @relation("AssignmentAuthor", fields: [created_by], references: [id], onDelete: Restrict)
+  task_mode              String                      @default("DOCUMENT")
+  difficulty             String?
+  max_marks              Int?
+  passing_marks          Int?
+  deadline               DateTime?                   @db.Timestamptz(6)
+  late_policy            String?
+  max_attempts           Int                         @default(1)
+  instructions_markdown  String?
+  created_at             DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                    @default(now()) @updatedAt @db.Timestamptz(6)
+  course                 Course                      @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  author                 User                        @relation("AssignmentAuthor", fields: [created_by], references: [id], onDelete: Restrict)
   views                  AssignmentView[]
   access_attempts        AssignmentAccessAttempt[]
+  task_attachments       AssignmentTaskAttachment[]
+  rubric_criteria        AssignmentRubricCriterion[]
+  submissions            AssignmentSubmission[]
+
   @@index([course_id, published, archived])
   @@index([created_by, created_at])
   @@map("assignments")
 }
 
+model AssignmentTaskAttachment {
+  id            String     @id @default(uuid()) @db.Uuid
+  assignment_id String     @db.Uuid
+  public_id     String
+  secure_url    String
+  resource_type String     @default("image")
+  original_name String
+  mime_type     String
+  bytes         Int
+  version       Int?
+  uploaded_by   String     @db.Uuid
+  created_at    DateTime   @default(now()) @db.Timestamptz(6)
+  assignment    Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  uploader      User       @relation("TaskAttachmentUploader", fields: [uploaded_by], references: [id], onDelete: Restrict)
+
+  @@index([assignment_id, created_at])
+  @@map("assignment_task_attachments")
+}
+
+model AssignmentRubricCriterion {
+  id            String     @id @default(uuid()) @db.Uuid
+  assignment_id String     @db.Uuid
+  title         String
+  description   String     @default("")
+  max_marks     Int
+  position      Int        @default(0)
+  assignment    Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+
+  @@index([assignment_id, position])
+  @@map("assignment_rubric_criteria")
+}
+
+model AssignmentSubmission {
+  id              String                     @id @default(uuid()) @db.Uuid
+  assignment_id   String                     @db.Uuid
+  student_id      String                     @db.Uuid
+  attempt_number  Int                        @default(1)
+  status          String                     @default("DRAFT")
+  answer_markdown String                     @default("")
+  score           Int?
+  feedback        String?
+  reviewer_id     String?                    @db.Uuid
+  submitted_at    DateTime?                  @db.Timestamptz(6)
+  reviewed_at     DateTime?                  @db.Timestamptz(6)
+  created_at      DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime                   @updatedAt @db.Timestamptz(6)
+  assignment      Assignment                 @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student         User                       @relation("TaskSubmissionStudent", fields: [student_id], references: [id], onDelete: Restrict)
+  reviewer        User?                      @relation("TaskSubmissionReviewer", fields: [reviewer_id], references: [id], onDelete: SetNull)
+  files           AssignmentSubmissionFile[]
+  evaluations     AssignmentEvaluation[]
+
+  @@unique([assignment_id, student_id, attempt_number])
+  @@index([assignment_id, status])
+  @@index([student_id, updated_at])
+  @@map("assignment_submissions")
+}
+
+model AssignmentSubmissionFile {
+  id            String               @id @default(uuid()) @db.Uuid
+  submission_id String               @db.Uuid
+  public_id     String
+  secure_url    String
+  resource_type String               @default("raw")
+  original_name String
+  mime_type     String
+  bytes         Int
+  version       Int?
+  created_at    DateTime             @default(now()) @db.Timestamptz(6)
+  submission    AssignmentSubmission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
+
+  @@index([submission_id, created_at])
+  @@map("assignment_submission_files")
+}
+
+model AssignmentEvaluation {
+  id            String               @id @default(uuid()) @db.Uuid
+  submission_id String               @db.Uuid
+  evaluator_id  String               @db.Uuid
+  decision      String
+  total_score   Int?
+  feedback      String               @default("")
+  rubric_scores Json                 @default("[]")
+  created_at    DateTime             @default(now()) @db.Timestamptz(6)
+  submission    AssignmentSubmission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
+  evaluator     User                 @relation("TaskEvaluationEvaluator", fields: [evaluator_id], references: [id], onDelete: Restrict)
+
+  @@index([submission_id, created_at])
+  @@map("assignment_evaluations")
+}
+
 model AssignmentView {
-  id             String   @id @default(uuid()) @db.Uuid
-  assignment_id  String   @db.Uuid
-  student_id     String   @db.Uuid
-  first_viewed   DateTime @default(now()) @db.Timestamptz(6)
-  last_viewed    DateTime @default(now()) @db.Timestamptz(6)
-  view_count     Int      @default(0)
-  last_page      Int      @default(1)
-  assignment     Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
-  student        User       @relation(fields: [student_id], references: [id], onDelete: Restrict)
+  id            String     @id @default(uuid()) @db.Uuid
+  assignment_id String     @db.Uuid
+  student_id    String     @db.Uuid
+  first_viewed  DateTime   @default(now()) @db.Timestamptz(6)
+  last_viewed   DateTime   @default(now()) @db.Timestamptz(6)
+  view_count    Int        @default(0)
+  last_page     Int        @default(1)
+  assignment    Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student       User       @relation(fields: [student_id], references: [id], onDelete: Restrict)
+
   @@unique([assignment_id, student_id])
   @@index([assignment_id, last_viewed])
   @@map("assignment_views")
 }
 
 model AssignmentAccessAttempt {
-  id             String   @id @default(uuid()) @db.Uuid
-  assignment_id  String   @db.Uuid
-  student_id     String?  @db.Uuid
-  reason         String
-  created_at     DateTime @default(now()) @db.Timestamptz(6)
-  assignment     Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
-  student        User?      @relation(fields: [student_id], references: [id], onDelete: SetNull)
+  id            String     @id @default(uuid()) @db.Uuid
+  assignment_id String     @db.Uuid
+  student_id    String?    @db.Uuid
+  reason        String
+  created_at    DateTime   @default(now()) @db.Timestamptz(6)
+  assignment    Assignment @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student       User?      @relation(fields: [student_id], references: [id], onDelete: SetNull)
+
   @@index([assignment_id, created_at])
   @@map("assignment_access_attempts")
 }
 
 model Assessment {
-  id          String   @id @default(uuid()) @db.Uuid
-  course_id   String   @db.Uuid
-  title       String
-  kind        String
-  exam_type   ExamType?
-  university  String?
-  campus      String?
-  department  String?
-  prompt      String
-  questions   Json     @default("[]")
-  question_bank Json @default("[]")
-  structured Boolean @default(false)
-  published Boolean @default(true)
-  chapter String @default("")
-  passing_percent Int @default(60)
-  review_policy String @default("AFTER_SUBMISSION")
-  randomize_questions Boolean @default(false)
-  randomize_options Boolean @default(false)
-  allow_navigation Boolean @default(true)
-  allow_resume Boolean @default(true)
-  practice Boolean @default(false)
-  revision Int @default(1)
-  images AssessmentImage[]
-  max_score   Int      @default(100)
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-  opens_at DateTime? @db.Timestamptz(6)
-  due_at DateTime? @db.Timestamptz(6)
-  duration_minutes Int?
-  max_attempts Int @default(1)
-  results_published Boolean @default(true)
-  allow_files Boolean @default(false)
-  course      Course   @relation(fields: [course_id], references: [id], onDelete: Restrict)
-  submissions AssessmentSubmission[]
-  attempts AssessmentAttempt[]
-  files AssessmentFile[]
+  id                  String                 @id @default(uuid()) @db.Uuid
+  course_id           String                 @db.Uuid
+  title               String
+  kind                String
+  exam_type           ExamType?
+  university          String?
+  campus              String?
+  department          String?
+  prompt              String
+  questions           Json                   @default("[]")
+  question_bank       Json                   @default("[]")
+  structured          Boolean                @default(false)
+  published           Boolean                @default(true)
+  chapter             String                 @default("")
+  passing_percent     Int                    @default(60)
+  review_policy       String                 @default("AFTER_SUBMISSION")
+  randomize_questions Boolean                @default(false)
+  randomize_options   Boolean                @default(false)
+  allow_navigation    Boolean                @default(true)
+  allow_resume        Boolean                @default(true)
+  practice            Boolean                @default(false)
+  revision            Int                    @default(1)
+  images              AssessmentImage[]
+  max_score           Int                    @default(100)
+  created_at          DateTime               @default(now()) @db.Timestamptz(6)
+  opens_at            DateTime?              @db.Timestamptz(6)
+  due_at              DateTime?              @db.Timestamptz(6)
+  duration_minutes    Int?
+  max_attempts        Int                    @default(1)
+  results_published   Boolean                @default(true)
+  allow_files         Boolean                @default(false)
+  course              Course                 @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  submissions         AssessmentSubmission[]
+  attempts            AssessmentAttempt[]
+  files               AssessmentFile[]
 
   @@index([course_id])
   @@index([published, exam_type, university, campus, department])
@@ -400,20 +590,20 @@ model Assessment {
 }
 
 model AssessmentSubmission {
-  id            String   @id @default(uuid()) @db.Uuid
-  assessment_id String   @db.Uuid
-  student_id    String   @db.Uuid
-  answer        String
-  submitted_at  DateTime @default(now()) @db.Timestamptz(6)
-  score         Int?
-  feedback      String?
-  reviewed_at   DateTime? @db.Timestamptz(6)
-  grading Json @default("[]")
-  attempt_number Int @default(1)
-  attachment_id String? @unique @db.Uuid
-  attachment AssessmentFile? @relation(fields: [attachment_id], references: [id], onDelete: Restrict)
-  assessment    Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
-  student       User @relation(fields: [student_id], references: [id], onDelete: Restrict)
+  id             String          @id @default(uuid()) @db.Uuid
+  assessment_id  String          @db.Uuid
+  student_id     String          @db.Uuid
+  answer         String
+  submitted_at   DateTime        @default(now()) @db.Timestamptz(6)
+  score          Int?
+  feedback       String?
+  reviewed_at    DateTime?       @db.Timestamptz(6)
+  grading        Json            @default("[]")
+  attempt_number Int             @default(1)
+  attachment_id  String?         @unique @db.Uuid
+  attachment     AssessmentFile? @relation(fields: [attachment_id], references: [id], onDelete: Restrict)
+  assessment     Assessment      @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
+  student        User            @relation(fields: [student_id], references: [id], onDelete: Restrict)
 
   @@unique([assessment_id, student_id])
   @@index([student_id])
@@ -421,29 +611,66 @@ model AssessmentSubmission {
 }
 
 model Lesson {
-  id           String             @id @default(uuid()) @db.Uuid
-  course_id    String             @db.Uuid
-  title        String
-  chapter      String             @default("Getting started")
-  position     Int
-  kind         String
-  preview      Boolean            @default(false)
-  content      String             @default("")
-  storage_path String?
-  quiz         Json?
-  practice Boolean @default(false)
-  chapter_id   String?            @db.Uuid
-  status       LessonStatus       @default(PUBLISHED)
-  draft        Json?
-  revision     Int                @default(1)
-  published_at DateTime?          @db.Timestamptz(6)
-  course       Course             @relation(fields: [course_id], references: [id], onDelete: Restrict)
-  chapterRef   Chapter?           @relation(fields: [chapter_id], references: [id], onDelete: Restrict)
-  progress     LearningProgress[]
+  id              String                  @id @default(uuid()) @db.Uuid
+  course_id       String                  @db.Uuid
+  title           String
+  chapter         String                  @default("Getting started")
+  position        Int
+  kind            String
+  preview         Boolean                 @default(false)
+  content         String                  @default("")
+  storage_path    String?
+  quiz            Json?
+  practice        Boolean                 @default(false)
+  chapter_id      String?                 @db.Uuid
+  status          LessonStatus            @default(PUBLISHED)
+  draft           Json?
+  revision        Int                     @default(1)
+  published_at    DateTime?               @db.Timestamptz(6)
+  course          Course                  @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  chapterRef      Chapter?                @relation(fields: [chapter_id], references: [id], onDelete: Restrict)
+  progress        LearningProgress[]
+  images          LessonImage[]
+  sectionProgress LessonSectionProgress[]
 
   @@unique([course_id, position], map: "lessons_course_id_position_key")
   @@index([chapter_id])
   @@map("lessons")
+}
+
+model LessonImage {
+  id            String   @id @default(uuid()) @db.Uuid
+  lesson_id     String   @db.Uuid
+  public_id     String
+  secure_url    String
+  resource_type String   @default("image")
+  original_name String
+  alt_text      String   @default("")
+  caption       String?
+  display_size  String   @default("medium")
+  width         Int?
+  height        Int?
+  bytes         Int
+  uploaded_by   String   @db.Uuid
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  lesson        Lesson   @relation(fields: [lesson_id], references: [id], onDelete: Cascade)
+
+  @@index([lesson_id, created_at])
+  @@map("lesson_images")
+}
+
+model LessonSectionProgress {
+  user_id      String   @db.Uuid
+  lesson_id    String   @db.Uuid
+  section_id   String
+  completed_at DateTime @default(now()) @db.Timestamptz(6)
+  last_visited DateTime @default(now()) @db.Timestamptz(6)
+  user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  lesson       Lesson   @relation(fields: [lesson_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, lesson_id, section_id])
+  @@index([lesson_id, section_id])
+  @@map("lesson_section_progress")
 }
 
 model Chapter {
@@ -460,100 +687,103 @@ model Chapter {
 }
 
 model AssessmentAttempt {
-  id String @id @default(uuid()) @db.Uuid
-  assessment_id String @db.Uuid
-  student_id String @db.Uuid
-  number Int
-  started_at DateTime @default(now()) @db.Timestamptz(6)
-  expires_at DateTime? @db.Timestamptz(6)
-  submitted_at DateTime? @db.Timestamptz(6)
-  answer String?
-  responses Json @default("{}")
-  grading Json @default("[]")
-  marked String[] @default([])
-  question_order String[] @default([])
-  option_order Json @default("{}")
-  saved_at DateTime? @db.Timestamptz(6)
-  save_version Int @default(0)
-  access_key String @default(uuid()) @db.Uuid
-  review_policy String?
-  score Int?
-  feedback String?
-  assessment Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
-  student User @relation(fields: [student_id], references: [id], onDelete: Restrict)
+  id             String     @id @default(uuid()) @db.Uuid
+  assessment_id  String     @db.Uuid
+  student_id     String     @db.Uuid
+  number         Int
+  started_at     DateTime   @default(now()) @db.Timestamptz(6)
+  expires_at     DateTime?  @db.Timestamptz(6)
+  submitted_at   DateTime?  @db.Timestamptz(6)
+  answer         String?
+  responses      Json       @default("{}")
+  grading        Json       @default("[]")
+  marked         String[]   @default([])
+  question_order String[]   @default([])
+  option_order   Json       @default("{}")
+  saved_at       DateTime?  @db.Timestamptz(6)
+  save_version   Int        @default(0)
+  access_key     String     @default(uuid()) @db.Uuid
+  review_policy  String?
+  score          Int?
+  feedback       String?
+  assessment     Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
+  student        User       @relation(fields: [student_id], references: [id], onDelete: Restrict)
+
   @@unique([assessment_id, student_id, number])
   @@map("assessment_attempts")
 }
 
 model AssessmentFile {
-  id String @id @default(uuid()) @db.Uuid
-  assessment_id String @db.Uuid
-  student_id String @db.Uuid
-  name String
-  mime_type String
-  content Bytes
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  assessment Assessment @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
-  student User @relation(fields: [student_id], references: [id], onDelete: Restrict)
-  submission AssessmentSubmission?
+  id            String                @id @default(uuid()) @db.Uuid
+  assessment_id String                @db.Uuid
+  student_id    String                @db.Uuid
+  name          String
+  mime_type     String
+  content       Bytes
+  created_at    DateTime              @default(now()) @db.Timestamptz(6)
+  assessment    Assessment            @relation(fields: [assessment_id], references: [id], onDelete: Restrict)
+  student       User                  @relation(fields: [student_id], references: [id], onDelete: Restrict)
+  submission    AssessmentSubmission?
+
   @@index([assessment_id, student_id])
   @@map("assessment_files")
 }
 
 model Notification {
   push_delivered_at DateTime? @db.Timestamptz(6)
-  push_claimed_at DateTime? @db.Timestamptz(6)
-  push_attempts Int @default(0)
-  id String @id @default(uuid()) @db.Uuid
-  user_id String @db.Uuid
-  course_id String? @db.Uuid
-  event_key String
-  kind String
-  title String
-  message String
-  href String
-  read_at DateTime? @db.Timestamptz(6)
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  course Course? @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  push_claimed_at   DateTime? @db.Timestamptz(6)
+  push_attempts     Int       @default(0)
+  id                String    @id @default(uuid()) @db.Uuid
+  user_id           String    @db.Uuid
+  course_id         String?   @db.Uuid
+  event_key         String
+  kind              String
+  title             String
+  message           String
+  href              String
+  read_at           DateTime? @db.Timestamptz(6)
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  user              User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  course            Course?   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+
   @@unique([user_id, event_key])
   @@index([user_id, read_at, created_at])
   @@map("notifications")
 }
 
 model Payment {
-  @@index([mode, status], map: "payments_mode_status")
-  mode String @default("unknown")
-  verified_at DateTime? @db.Timestamptz(6)
-  payment_method String?
-  payer_name String?
-  payment_date DateTime? @db.Date
-  admin_remark String?
-  verified_by String? @db.Uuid
-  receipt_public_id String?
+  mode                  String       @default("unknown")
+  verified_at           DateTime?    @db.Timestamptz(6)
+  payment_method        String?
+  payer_name            String?
+  payment_date          DateTime?    @db.Date
+  admin_remark          String?
+  verified_by           String?      @db.Uuid
+  receipt_public_id     String?
   receipt_resource_type String?
-  receipt_url String?
+  receipt_url           String?
   receipt_original_name String?
-  receipt_mime_type String?
-  receipt_bytes Int?
-  id              String       @id @default(uuid()) @db.Uuid
-  user_id         String       @db.Uuid
-  course_id       String       @db.Uuid
-  tx_ref          String       @unique
-  amount_minor    Int
-  currency        String
-  status          String       @default("PENDING")
-  idempotency_key String       @db.Uuid
-  checkout_url    String?
-  provider_ref    String?      @unique
-  created_at      DateTime     @default(now()) @db.Timestamptz(6)
-  updated_at      DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
-  user            User         @relation(fields: [user_id], references: [id], onDelete: Restrict)
-  course          Course       @relation(fields: [course_id], references: [id], onDelete: Restrict)
-  enrollments     Enrollment[]
-  refund          Refund?
+  receipt_mime_type     String?
+  receipt_bytes         Int?
+  id                    String       @id @default(uuid()) @db.Uuid
+  user_id               String       @db.Uuid
+  course_id             String       @db.Uuid
+  tx_ref                String       @unique
+  amount_minor          Int
+  currency              String
+  status                String       @default("PENDING")
+  idempotency_key       String       @db.Uuid
+  checkout_url          String?
+  provider_ref          String?      @unique
+  created_at            DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime     @default(now()) @updatedAt @db.Timestamptz(6)
+  user                  User         @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  course                Course       @relation(fields: [course_id], references: [id], onDelete: Restrict)
+  enrollments           Enrollment[]
+  refund                Refund?
 
   @@unique([user_id, idempotency_key], map: "payments_user_id_idempotency_key_key")
+  @@index([mode, status], map: "payments_mode_status")
   @@index([user_id, course_id, status])
   @@map("payments")
 }
@@ -599,21 +829,21 @@ model LearningProgress {
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) @db.Uuid
-  actor_id   String?  @db.Uuid
-  action     String
-  target_id  String?  @db.Uuid
-  reason     String?
-  actor_name String?
-  actor_role String?
+  id            String   @id @default(uuid()) @db.Uuid
+  actor_id      String?  @db.Uuid
+  action        String
+  target_id     String?  @db.Uuid
+  reason        String?
+  actor_name    String?
+  actor_role    String?
   resource_type String?
-  resource_id String? @db.Uuid
-  description String?
-  old_values Json?
-  new_values Json?
-  metadata Json?
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-  actor      User?    @relation(fields: [actor_id], references: [id], onDelete: Restrict)
+  resource_id   String?  @db.Uuid
+  description   String?
+  old_values    Json?
+  new_values    Json?
+  metadata      Json?
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  actor         User?    @relation(fields: [actor_id], references: [id], onDelete: Restrict)
 
   @@index([target_id, created_at])
   @@index([action, created_at])
@@ -645,12 +875,13 @@ model LegacySchemaMigration {
 }
 
 model AssessmentImage {
-  id String @id @default(uuid()) @db.Uuid
-  assessment_id String @db.Uuid
-  name String
-  mime_type String
-  content Bytes
-  assessment Assessment @relation(fields: [assessment_id], references: [id], onDelete: Cascade)
+  id            String     @id @default(uuid()) @db.Uuid
+  assessment_id String     @db.Uuid
+  name          String
+  mime_type     String
+  content       Bytes
+  assessment    Assessment @relation(fields: [assessment_id], references: [id], onDelete: Cascade)
+
   @@index([assessment_id])
   @@map("assessment_images")
 }

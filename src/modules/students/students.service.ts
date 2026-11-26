@@ -63,6 +63,25 @@ export class StudentsService {
       return { message: 'Account status updated and sessions revoked.' };
     });
   }
+  remove(actor: CurrentUser, id: string, reason: string) {
+    if (actor.role !== 'SUPER_ADMIN') throw new ConflictException('Only a Super Admin can permanently delete student accounts.');
+    if (actor.id === id) throw new ConflictException('You cannot delete your own account.');
+    return this.db.atomic(async tx => {
+      const previous = await this.student(id, tx);
+      await tx.authSession.deleteMany({ where: { user_id: id } });
+      await tx.passwordResetToken.deleteMany({ where: { user_id: id } });
+      try {
+        await tx.user.delete({ where: { id } });
+      } catch (error) {
+        if ((error as { code?: string }).code === 'P2003') {
+          throw new ConflictException('This student has academic, payment, or audit history and cannot be permanently deleted. Deactivate the account instead.');
+        }
+        throw error;
+      }
+      await audit(tx, { actor, target: id, action: 'STUDENT_DELETED', description: `Student account ${previous.email} was permanently deleted.`, reason, oldValues: { name: previous.name, email: previous.email } });
+      return { deleted: true, message: 'Student account permanently deleted.' };
+    });
+  }
   revokeSessions(actor: CurrentUser, id: string, reason: string) {
     return this.db.atomic(async tx => {
       await this.student(id, tx);

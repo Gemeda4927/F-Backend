@@ -87,18 +87,11 @@ export class PaymentsService {
         );
       } catch (error) {
         if (error instanceof CloudinaryStorageError) {
-          if (error.code === 'permission_denied')
-            throw new ConflictException(
-              'Receipt storage is not enabled. The backend Cloudinary API key needs create/upload permission.',
-            );
-          if (error.code === 'authentication_failed')
-            throw new ConflictException(
-              'Receipt storage credentials were rejected. Check the backend Cloudinary settings.',
-            );
-          if (error.code === 'not_configured' || error.code === 'configuration_incomplete')
-            throw new ConflictException(
-              'Receipt storage is not configured on the backend.',
-            );
+          // Keep provider credentials and operational details in the backend
+          // log. Students should get one actionable, non-sensitive message.
+          throw new ConflictException(
+            "We couldn't upload your payment receipt. Please try again.",
+          );
         }
         throw new ConflictException(
           'The receipt could not be stored. Please try again or submit a transaction reference.',

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Module, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permissions, User } from '../../common/decorators/permissions.js';
 import type { CurrentUser } from '../../common/types.js';
@@ -21,6 +21,8 @@ export class StudentsController {
   update(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: StudentProfileDto) { return this.students.update(u, id, dto); }
   @Patch('students/:id/status') @ApiOperation({ summary: 'Activate, deactivate, suspend or restore; revoke sessions atomically' })
   status(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: StudentStatusDto) { return this.students.status(u, id, dto); }
+  @Delete('students/:id') @ApiOperation({ summary: 'Permanently delete an empty student account' })
+  remove(@User() u: CurrentUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: StudentReasonDto) { return this.students.remove(u, id, dto.reason); }
   @Get('students/:id/courses') @ApiOperation({ summary: 'Paginate enrollments, access and learning progress' })
   courses(@Param('id', ParseUUIDPipe) id: string, @Query() q: PageDto) { return this.students.courses(id, q); }
   @Get('students/:id/progress') @ApiOperation({ summary: 'Paginate course completion summaries' })

@@ -28,6 +28,9 @@ type CloudinaryAsset = {
   resource_type: string;
   bytes: number;
   version?: number;
+  width?: number;
+  height?: number;
+  format?: string;
 };
 
 function config() {
@@ -82,6 +85,12 @@ export async function uploadCloudinaryFile(
   const resourceType = resourceTypeOverride === 'auto'
     ? (mimeType === 'application/pdf' ? 'raw' : 'image')
     : resourceTypeOverride;
+  // `type` is a signed Cloudinary upload parameter. It must be included in
+  // the signature as well as the multipart body. Thumbnail uploads use the
+  // default `upload` type, but sensitive receipts use `authenticated`.
+  const signedParams = deliveryType === 'upload'
+    ? params
+    : { ...params, type: deliveryType };
   const form = new FormData();
   form.append(
     'file',
@@ -90,15 +99,22 @@ export async function uploadCloudinaryFile(
   );
   if (deliveryType !== 'upload') form.append('type', deliveryType);
   form.append('api_key', settings.apiKey);
-  form.append('signature', signature(params, settings.apiSecret));
-  for (const [key, value] of Object.entries(params)) form.append(key, value);
+  form.append('signature', signature(signedParams, settings.apiSecret));
+  for (const [key, value] of Object.entries(signedParams)) form.append(key, value);
   const response = await fetch(
     `https://api.cloudinary.com/v1_1/${settings.cloudName}/${resourceType}/upload`,
     { method: 'POST', body: form },
   );
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
-    const lower = detail.toLowerCase();
+    let providerMessage = 'unknown provider error';
+    try {
+      const parsed = JSON.parse(detail) as { error?: { message?: string } };
+      if (typeof parsed.error?.message === 'string') providerMessage = parsed.error.message;
+    } catch {
+      if (detail.trim()) providerMessage = detail.trim().replace(/\s+/g, ' ').slice(0, 240);
+    }
+    const lower = providerMessage.toLowerCase();
     const code: CloudinaryFailureCode =
       response.status === 401 || lower.includes('invalid api')
         ? 'authentication_failed'
@@ -114,7 +130,9 @@ export async function uploadCloudinaryFile(
         : code === 'authentication_failed'
           ? 'Cloudinary rejected the upload credentials.'
           : `Cloudinary rejected the upload (HTTP ${response.status}).`;
-    logger.error(`${safeMessage} status=${response.status} detail=${detail.slice(0, 500)}`);
+    logger.error(
+      `upload failed status=${response.status} code=${code} resource_type=${resourceType} delivery_type=${deliveryType} public_id_prefix=${publicId.slice(0, 48)} provider_message=${providerMessage}`,
+    );
     throw new CloudinaryStorageError(code, safeMessage, response.status);
   }
   const result = (await response.json()) as Partial<CloudinaryAsset>;
@@ -129,6 +147,9 @@ export async function uploadCloudinaryFile(
     resource_type: resourceType,
     bytes: Number((result as { bytes?: number }).bytes ?? content.byteLength),
     version: Number((result as { version?: number }).version ?? 0) || undefined,
+    width: Number((result as { width?: number }).width ?? 0) || undefined,
+    height: Number((result as { height?: number }).height ?? 0) || undefined,
+    format: typeof (result as { format?: unknown }).format === 'string' ? (result as { format: string }).format : undefined,
   };
 }
 

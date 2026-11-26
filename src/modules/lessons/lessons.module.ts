@@ -36,6 +36,7 @@ import { LessonDto, QuizSubmissionDto } from './lessons.dto.js';
 import { LessonsService } from './lessons.service.js';
 import { removePrivateFile } from './storage.js';
 import type { AuthRequest } from '../../common/types.js';
+import { deleteCloudinaryImage, uploadCloudinaryFile } from '../../common/cloudinary.js';
 
 /**
  * Runs before Multer writes anything to disk: only the course owner (or an admin)
@@ -118,6 +119,19 @@ class LessonsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.service.progress(u, id);
+  }
+  @Get(':id/sections-progress') sectionProgress(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.sectionProgress(u, id);
+  }
+  @Post(':id/sections/:sectionId/complete') completeSection(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('sectionId') sectionId: string,
+  ) {
+    return this.service.completeSection(u, id, sectionId);
   }
   @Get(':id') detail(
     @User() u: CurrentUser,
@@ -217,6 +231,64 @@ class LessonsController {
       return { message: 'Protected material uploaded' };
     } catch (error) {
       unlinkSync(file.path);
+      throw error;
+    }
+  }
+  @Permissions('courses:write')
+  @Post(':id/image')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) =>
+        cb(null, ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimetype)),
+    }),
+  )
+  async uploadImage(
+    @User() u: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('alt_text') altText: string | undefined,
+    @Body('caption') caption: string | undefined,
+    @Body('display_size') displaySize: string | undefined,
+    @UploadedFile() file?: { buffer: Buffer; originalname: string; mimetype: string; size: number },
+  ) {
+    if (!file) throw new BadRequestException('Choose a PNG, JPEG, or WebP image up to 5 MB');
+    const lesson = await this.db.lesson.findUnique({ where: { id }, select: { id: true, course_id: true } });
+    if (!lesson) throw new NotFoundException('Topic not found');
+    await this.courses.assertOwner(u, lesson.course_id);
+    const signatures: Record<string, Buffer> = {
+      'image/png': Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      'image/jpeg': Buffer.from([0xff, 0xd8, 0xff]),
+      'image/webp': Buffer.from('RIFF'),
+    };
+    const signature = signatures[file.mimetype];
+    if (!signature || file.buffer.length < signature.length || !file.buffer.subarray(0, signature.length).equals(signature))
+      throw new BadRequestException('The selected file is not a valid PNG, JPEG, or WebP image');
+    const size = ['small', 'medium', 'large', 'full'].includes(displaySize ?? '') ? displaySize! : 'medium';
+    const safeAlt = String(altText ?? '').trim().slice(0, 240);
+    const safeCaption = String(caption ?? '').trim().slice(0, 500) || null;
+    const publicId = `learnova/lesson-images/${lesson.id}/${randomUUID()}`;
+    let asset: Awaited<ReturnType<typeof uploadCloudinaryFile>> | undefined;
+    try {
+      asset = await uploadCloudinaryFile(file.buffer, file.mimetype, publicId, 'upload', 'image');
+      const saved = await this.db.lessonImage.create({
+        data: {
+          lesson_id: lesson.id,
+          public_id: asset.public_id,
+          secure_url: asset.secure_url,
+          resource_type: asset.resource_type,
+          original_name: file.originalname.slice(0, 255),
+          alt_text: safeAlt,
+          caption: safeCaption,
+          display_size: size,
+          width: asset.width ?? null,
+          height: asset.height ?? null,
+          bytes: asset.bytes,
+          uploaded_by: u.id,
+        },
+      });
+      return { id: saved.id, url: saved.secure_url, public_id: saved.public_id, alt_text: saved.alt_text, caption: saved.caption, display_size: saved.display_size };
+    } catch (error) {
+      if (asset) await deleteCloudinaryImage(asset.public_id, 'upload', 'image').catch(() => undefined);
       throw error;
     }
   }
