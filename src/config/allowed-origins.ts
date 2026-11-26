@@ -1,5 +1,3 @@
-const deployedFrontendOrigin = 'https://f-fronted-vy1c.vercel.app';
-
 export function getAllowedFrontendOrigins() {
   const configured = (
     process.env.CORS_ORIGINS ??
@@ -9,9 +7,5 @@ export function getAllowedFrontendOrigins() {
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  return [
-    ...new Set(
-      [...configured, deployedFrontendOrigin],
-    ),
-  ];
+  return [...new Set(configured)];
 }

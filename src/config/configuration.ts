@@ -98,6 +98,13 @@ export function validatePlatformEnvironment() {
       !process.env.FRONTEND_URL!.startsWith('https:'))
   )
     throw new Error('Production requires HTTPS and secure cookies');
+  if (
+    (process.env.APP_ENV ?? process.env.NODE_ENV) === 'production' &&
+    process.env.COOKIE_SAME_SITE !== 'none'
+  )
+    throw new Error(
+      'Production cross-origin authentication requires COOKIE_SAME_SITE=none',
+    );
   const mode = process.env.CHAPA_MODE ?? 'test';
   if (!['test', 'live'].includes(mode))
     throw new Error('CHAPA_MODE must be test or live');

@@ -18,7 +18,6 @@ describe('runtime configuration', () => {
       corsOrigins: [
         'http://localhost:3000',
         'https://example.com',
-        'https://f-fronted-vy1c.vercel.app',
       ],
     });
   });
